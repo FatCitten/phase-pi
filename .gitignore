@@ -1,0 +1,9 @@
+node_modules/
+.phase/
+*.log
+.DS_Store
+__pycache__/
+*.pyc
+phase-tpm-allocator/
+dist/
+*.tsbuildinfo

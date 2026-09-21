@@ -1,0 +1,69 @@
+{
+  "name": "phase-pi",
+  "version": "2.0.0",
+  "description": "phase for the Pi agent — a server-shaped coordination suite that turns human intent into a bounded allocation plan and drives concurrent agentic work through a control+data bus + atomic ticket system. Bundles Pi tools + skill, yet runs anywhere.",
+  "type": "module",
+  "license": "MIT",
+  "author": "FatCitten",
+  "keywords": [
+    "pi-package",
+    "pi",
+    "agent",
+    "agents",
+    "orchestration",
+    "coordination",
+    "ticketing",
+    "dag",
+    "llm",
+    "slm",
+    "mcp",
+    "workflow"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "phase": "./bin/phase-alloc.mjs",
+    "phase-alloc": "./bin/phase-alloc.mjs",
+    "phase-mcp": "./src/mcp-server.mjs",
+    "phase-worker": "./bin/phase-worker.mjs",
+    "phase-schedule": "./bin/phase-schedule.mjs",
+    "phase-orchestrate": "./bin/phase-orchestrate.mjs",
+    "phase-chat": "./bin/phase-chat.mjs",
+    "phase-chatroom": "./bin/phase-chatroom.mjs",
+    "phase-bus": "./bin/phase-bus.mjs"
+  },
+  "scripts": {
+    "mcp": "node src/mcp-server.mjs",
+    "mcp:ping": "node src/mcp-server.mjs --ping",
+    "smoke": "bash examples/smoke-test.sh",
+    "orch": "node bin/phase-orchestrate.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@types/node": "^20",
+    "typebox": "*",
+    "typescript": "^5"
+  },
+  "files": [
+    "bin",
+    "src",
+    "examples",
+    "skills",
+    "extensions"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions"
+    ],
+    "skills": [
+      "./skills"
+    ],
+    "type": "package"
+  }
+}

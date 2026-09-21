@@ -1,0 +1,57 @@
+{
+  "server": "phase",
+  "version": "2.0.0",
+  "description": "MCP tool definition for the Phase allocator — turn human intent into a bounded Phase ISA allocation plan (route/tools/budget) for an LLM agent to execute. The SLM coordinates; the calling LLM does the work.",
+  "tools": [
+    {
+      "name": "phase_allocate",
+      "description": "Turn human intent into a bounded Phase allocation plan. Calls the SLM (or a heuristic fallback) to decide the agent route, granted tools, and budget for a task in a repo. Returns a JSON plan plus the human-readable Phase ISA. Use this before executing a task so you work within the right budget and tool set. Never invents project truth; clamps every decision to the caller's ceiling.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "task": {
+            "type": "string",
+            "description": "Human intent / objective to allocate for (e.g. 'fix the failing auth tests')."
+          },
+          "repo": {
+            "type": "string",
+            "description": "Absolute path to the repository/git root to coordinate. Defaults to the current working directory."
+          },
+          "policy": {
+            "type": "string",
+            "enum": ["model", "heuristic"],
+            "description": "'model' calls the configured SLM endpoint; 'heuristic' is a deterministic offline fallback. Default model."
+          },
+          "model": {
+            "type": "string",
+            "description": "SLM model id, e.g. qwen2.5:0.5b. Default reads PHASE_SLM_MODEL."
+          },
+          "base_url": {
+            "type": "string",
+            "description": "OpenAI-compatible chat-completions endpoint. Default reads PHASE_SLM_BASE_URL or http://127.0.0.1:8080/v1."
+          },
+          "tools": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Allowed tools, e.g. ['read','edit','test','bash']. Default ['read','edit','test','bash']."
+          },
+          "budget": {
+            "type": "object",
+            "description": "Budget overrides, e.g. {wall_ms: 120000, context_tokens: 8192}."
+          }
+        },
+        "required": ["task"]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "schema": { "type": "string" },
+          "objective": { "type": "string" },
+          "allocation_policy": { "type": "string" },
+          "allocation": { "type": "object" },
+          "isa": { "type": "string" }
+        }
+      }
+    }
+  ]
+}

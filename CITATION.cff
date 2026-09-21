@@ -1,0 +1,9 @@
+cff-version: 1.2.0
+message: "If Phase contributes to published research, cite this software release and the exact allocation seed hash used."
+title: "Phase (phase-pi)"
+abstract: "A servant-shaped coordination suite for AI agents, bundled for the Pi agent. Turns human intent into a bounded Phase allocation plan that a small language model coordinates and a large language model executes; drives concurrent workers via a control+data bus and atomic ticket system. Depends free, runs anywhere Node >= 20 runs."
+license: MIT
+preferred-citation:
+  title: "Phase (phase-pi)"
+  type: software
+  repository-code: "https://github.com/FatCitten/phase-pi"
