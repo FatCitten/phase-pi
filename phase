@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# phase — local launcher. Pi-native. Hand off to Pi.
+#   ./phase                       (bootstraps Pi, installs phase, opens Pi)
+#   ./phase "task"                (same; task handed to your phase-aware Pi session)
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec node "$SCRIPT_DIR/bin/phase.js" "$@"

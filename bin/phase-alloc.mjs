@@ -15,7 +15,6 @@ import { PhaseAllocator, allocationToAssembly } from '../src/allocator.mjs';
 import { normalizeWorkflow } from '../src/phase-ir.mjs';
 import { PHASE_ARCHITECTURE_SEED, seedHash } from '../src/phase-seeds.mjs';
 import { canonicalRepositoryPath, repositoryDomainId, gitSnapshot } from '../src/util.mjs';
-import { ADAPTERS, adapterById, adapterSummary, resolveAdapter } from '../src/adapters.mjs';
 import { resolveProvider } from '../src/provider.mjs';
 
 const USAGE = `phase — turn human intent into a Phase allocation plan an LLM agent can execute.
@@ -40,8 +39,6 @@ Options:
   --stream-isa        stream the ISA plan inline to stdout as it's generated
   --tools a,b,c       allowed tools                       (default: read,edit,test,bash)
   --budget.k=v        budget override, e.g. --budget.wall_ms=120000
-  --adapter <id>      build a harness tool call (pi|codex|claude|gemini)
-  --adapters          list available harness adapters
   --isa               print only the human-readable Phase ISA plan
   --json              print the full plan as JSON         (default)
   --help, -h          show this help
@@ -61,15 +58,13 @@ function defaultProvider() {
 
 function parseArgs(argv) {
   const def = defaultProvider();
-  const opt = { repo: process.cwd(), policy: process.env.PHASE_SLM_POLICY ?? 'model', baseUrl: process.env.PHASE_SLM_BASE_URL ?? def.baseUrl, model: process.env.PHASE_SLM_MODEL ?? def.model, retries: process.env.PHASE_SLM_RETRIES ?? 2, retryDelay: process.env.PHASE_SLM_RETRY_DELAY ?? 400, retryBackoff: 2, stream: !!process.env.PHASE_SLM_STREAM, streamIsa: false, tools: null, budget: {}, isa: false, json: true, task: null, file: null, adapter: null, listAdapters: false };
+  const opt = { repo: process.cwd(), policy: process.env.PHASE_SLM_POLICY ?? 'model', baseUrl: process.env.PHASE_SLM_BASE_URL ?? def.baseUrl, model: process.env.PHASE_SLM_MODEL ?? def.model, retries: process.env.PHASE_SLM_RETRIES ?? 2, retryDelay: process.env.PHASE_SLM_RETRY_DELAY ?? 400, retryBackoff: 2, stream: !!process.env.PHASE_SLM_STREAM, streamIsa: false, tools: null, budget: {}, isa: false, json: true, task: null, file: null };
   const positional = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '-h' || a === '--help') { console.log(USAGE); process.exit(0); }
     else if (a === '--isa') { opt.isa = true; opt.json = false; }
     else if (a === '--json') { opt.json = true; opt.isa = false; }
-    else if (a === '--adapters') { opt.listAdapters = true; }
-    else if (a === '--adapter') { opt.adapter = argv[++i]; if (opt.adapter == null) fail('--adapter requires an id'); }
     else if (a === '--repo') { opt.repo = argv[++i]; if (opt.repo == null) fail('--repo requires a path'); }
     else if (a === '--policy') { opt.policy = String(argv[++i] ?? '').toLowerCase(); }
     else if (a === '--base-url' || a === '--base_url') { opt.baseUrl = argv[++i]; }
@@ -105,11 +100,6 @@ async function main() {
   const argv = process.argv.slice(2);
   const opt = parseArgs(argv);
   if (process.exitCode) return;
-
-  if (opt.listAdapters) {
-    console.log(JSON.stringify(ADAPTERS.map(({ id, label, notes }) => ({ id, label, notes })), null, 2));
-    return;
-  }
 
   const cwd = resolve(opt.repo);
   const intent = await readIntent(opt);
@@ -161,21 +151,10 @@ async function main() {
     isa: allocation.asm
   };
 
-  if (opt.adapter) {
-    const adapter = adapterById(opt.adapter) ?? resolveAdapter({ repo: cwd });
-    if (!adapterById(opt.adapter)) console.error(`phase: unknown adapter '${opt.adapter}'; using ${adapter.id}`);
-    const summary = adapterSummary(adapter, { task: intent.task, repo: cwd, model: workflow.allocator.model });
-    plan.harness = { adapter: adapter.id, label: adapter.label, invoke: summary.invoke };
-    if (opt.isa) console.log(summary.invoke);
-    else console.log(JSON.stringify(plan, null, 2));
-    return;
-  }
-
   if (opt.isa) {
     if (!opt.streamIsa) {
       console.log(`; phase allocation for: ${intent.task}`);
       console.log(allocation.asm);
-      console.log(`; policy=${allocation.policy}${allocation.policy !== 'heuristic' ? '' : ''}`);
     } else {
       process.stdout.write('\n');
     }

@@ -1,7 +1,7 @@
 {
   "name": "phase-pi",
-  "version": "2.0.0",
-  "description": "phase for the Pi agent — a server-shaped coordination suite that turns human intent into a bounded allocation plan and drives concurrent agentic work through a control+data bus + atomic ticket system. Bundles Pi tools + skill, yet runs anywhere.",
+  "version": "2.1.0",
+  "description": "phase — Pi-native. Turns human intent into a bounded plan and drives concurrent agents through a control+data bus + atomic ticket system. Bundled Pi tools + skill; runs only in the Pi agent.",
   "type": "module",
   "license": "MIT",
   "author": "FatCitten",
@@ -16,16 +16,14 @@
     "dag",
     "llm",
     "slm",
-    "mcp",
     "workflow"
   ],
   "engines": {
     "node": ">=20"
   },
   "bin": {
-    "phase": "./bin/phase-alloc.mjs",
+    "phase": "./bin/phase.js",
     "phase-alloc": "./bin/phase-alloc.mjs",
-    "phase-mcp": "./src/mcp-server.mjs",
     "phase-worker": "./bin/phase-worker.mjs",
     "phase-schedule": "./bin/phase-schedule.mjs",
     "phase-orchestrate": "./bin/phase-orchestrate.mjs",
@@ -34,9 +32,6 @@
     "phase-bus": "./bin/phase-bus.mjs"
   },
   "scripts": {
-    "mcp": "node src/mcp-server.mjs",
-    "mcp:ping": "node src/mcp-server.mjs --ping",
-    "smoke": "bash examples/smoke-test.sh",
     "orch": "node bin/phase-orchestrate.mjs",
     "typecheck": "tsc --noEmit"
   },
@@ -55,7 +50,10 @@
     "src",
     "examples",
     "skills",
-    "extensions"
+    "extensions",
+    "install.sh",
+    "phase",
+    "README.md"
   ],
   "pi": {
     "extensions": [

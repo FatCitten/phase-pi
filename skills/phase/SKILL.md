@@ -73,8 +73,8 @@ different brain model; otherwise phase falls back to the chat's model, then to a
   endpoint is down, everything falls back to deterministic heuristics and still works offline.
 
 ## Reference
-- Bins: `phase`, `phase-alloc`, `phase-orchestrate`, `phase-schedule`, `phase-worker`,
-  `phase-bus`, `phase-chat`, `phase-chatroom`, `phase-mcp`.
-- MCP server: `node src/mcp-server.mjs` (tool `phase_allocate`), per-call streaming.
-- Harness adapters: `phase --adapter pi|codex|claude|gemini`.
+- Tools: `phase_allocate`, `phase_orchestrate`, `phase_schedule`, `phase_bus_tickets`.
+- Backend bins: `phase-alloc`, `phase-orchestrate`, `phase-schedule`, `phase-worker`, `phase-bus`.
+- Skill/launcher: `/phase`, or `./phase` to bootstrap Pi.
 - Full docs: `README.md` in the phase repo.
+- Pi-only. No CLI-to-the-world, MCP, or adapters (later versions).

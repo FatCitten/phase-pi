@@ -24,7 +24,7 @@ intent into an allocation plan and coordinates it. Keep it that way.
 ```bash
 npm install
 npm run typecheck      # validates the bundled Pi extension types
-npm run smoke          # CLI allocator + MCP server, offline
+npm run smoke          # backend, offline
 ```
 
 ## Changes requiring explicit attention

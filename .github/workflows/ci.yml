@@ -6,7 +6,7 @@ on:
   pull_request:
 
 jobs:
-  test:
+  backend:
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -18,23 +18,9 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm
       - run: npm install
-      - name: CLI allocator smoke (heuristic, offline)
-        run: node bin/phase-alloc.mjs "fix the failing auth tests" --repo . --policy heuristic
-      - name: Phase ISA output
-        run: node bin/phase-alloc.mjs "refactor the schema layer" --policy heuristic --isa
-      - name: MCP server handshake + tools
-        run: npm run mcp:ping
-
-  typecheck:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-      - run: npm install
-      - name: tsc extension bundle
+      - name: smoke (backend, offline)
+        run: bash examples/smoke-test.sh
+      - name: typecheck Pi extension
         run: npm run typecheck
-      - name: phase orchestrates itself (dry-run)
+      - name: orchestrates itself (dry-run)
         run: node bin/phase-orchestrate.mjs "ship offline auth" --repo . --dry-run
