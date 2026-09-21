@@ -1,6 +1,6 @@
 {
   "name": "phase-pi",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "description": "phase — Pi-native. Turns human intent into a bounded plan and drives concurrent agents through a control+data bus + atomic ticket system. Bundled Pi tools + skill; runs only in the Pi agent.",
   "type": "module",
   "license": "MIT",

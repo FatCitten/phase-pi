@@ -2,6 +2,19 @@
 
 All notable changes, grouped by version. [SemVer](https://semver.org).
 
+## [2.1.1] — install safety
+
+Fix: re-running the launcher could brick a live Pi session (it re-ran `pi install`
+and spawned a nested `pi`). Install is now idempotent and non-destructive.
+
+- **Nested-Pi aware**: if run inside a live Pi session, phase stops — it never
+  spawns a nested `pi` or reloads the running session.
+- **Idempotent**: never re-registers phase if already present (matches abs/relative
+  path, basename, or npm name).
+- **Non-destructive**: backs up `~/.pi/agent/settings.json`, writes atomically
+  (tmp + rename), never leaves a half-written config. Falls back to `pi install`
+  only when needed — never during a live session.
+
 ## [2.1.0] — v1 Pi-native pivot
 
 Phase becomes **Pi-only**. One entrypoint: run it → ensure Pi, install phase into

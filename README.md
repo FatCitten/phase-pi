@@ -25,6 +25,10 @@ phase
 
 All do the same: **ensure Pi, install phase, open Pi**. Nothing else.
 
+**Safe to re-run.** Idempotent — if phase is already installed it changes
+nothing. Non-destructive — backs up Pi settings, writes atomically, and never
+spawns a nested Pi (so it won't brick your live session).
+
 ## What you get
 
 Inside Pi, phase adds 4 tools + a skill:
