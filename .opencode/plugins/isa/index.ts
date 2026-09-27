@@ -63,8 +63,14 @@ let active: { home: string; pointer: Pointer; actuals: Actuals; denied: boolean 
 
 const bin = (name: string): string => join(BIN, `isa-${name}.mjs`);
 
+// Inside the OpenCode host, process.execPath is the compiled opencode binary —
+// not a JS runtime. Spawning it with `isa-*.mjs --flags` makes the opencode CLI
+// try to parse our flags and die. Use a real Node runtime: $NODE, else `node`
+// from PATH.
+const NODE = process.env.NODE || "node";
+
 async function cli(name: string, args: string[], timeout = 300_000): Promise<string> {
-  const { stdout, stderr } = await execFileP(process.execPath, [bin(name), ...args], {
+  const { stdout, stderr } = await execFileP(NODE, [bin(name), ...args], {
     timeout,
     env: { ...process.env },
     maxBuffer: 10 * 1024 * 1024,
