@@ -129,6 +129,33 @@ function readSessionJson(cwd: string): any | null {
   }
 }
 
+/** Find the most recently active phase session near the launch directory.
+ *  Phase used to bind ONLY to cwd — launching pi from ~ (how humans actually
+ *  launch) silently bound nothing and the session started blind. Now, when
+ *  cwd has no session, we scan one level DOWN (~/ABYSS, ~/roblox-fps ...) and
+ *  one level SIDEWAYS (siblings), and surface the newest active session.
+ *  Bounded: depth 1 in both directions, no recursion, stat-only until a
+ *  session.json is found. */
+function findActiveSession(cwd: string): { repo: string; session: any } | null {
+  const local = readSessionJson(cwd);
+  if (local) return { repo: cwd, session: local };
+  const candidates: string[] = [];
+  const push = (dir: string) => {
+    try {
+      for (const e of readdirSync(dir, { withFileTypes: true })) if (e.isDirectory()) candidates.push(join(dir, e.name));
+    } catch { /* unreadable dir: skip */ }
+  };
+  push(cwd);                  // children: repos under the launch dir (~/ABYSS)
+  push(dirname(cwd));         // siblings: repos beside the launch dir
+  const found: { repo: string; session: any }[] = [];
+  for (const repo of candidates) {
+    const s = readSessionJson(repo);
+    if (s && (s.last_activity ?? s.updated_at)) found.push({ repo, session: s });
+  }
+  found.sort((a, b) => String(b.session.last_activity ?? "").localeCompare(String(a.session.last_activity ?? "")));
+  return found[0] ?? null;
+}
+
 function readTickets(cwd: string): PhaseTicket[] {
   const dir = join(phaseHome(cwd), "tickets");
   try {
@@ -834,29 +861,34 @@ export default function (pi: ExtensionAPI) {
   // ---------- startup: point every pi session at session.json ----------
   pi.on("session_start", async (_event, ctx) => {
     const cwd = ctx.cwd;
-    const sess = readSessionJson(cwd);
-    if (!sess) return; // unrelated repo: stay silent, bind nothing
+    // Bind the session from cwd, or — launching from ~ — from the most
+    // recently active phase repo among cwd's siblings (portfolio autodetect).
+    const found = findActiveSession(cwd);
+    if (!found) return; // no phase work anywhere nearby: stay silent, bind nothing
+    const sess = found.session;
+    const repo = found.repo;
 
-    pi.appendEntry("phase-session", { id: sess.id, name: sess.name, goal: sess.goal, cwd });
+    pi.appendEntry("phase-session", { id: sess.id, name: sess.name, goal: sess.goal, cwd, repo });
 
     if (ctx.hasUI) {
       updateWidget(ctx);
       if (process.env.PHASE_NO_AUTODETECT !== "1") {
-        const tickets = readTickets(cwd);
+        const tickets = readTickets(repo);
         const open = tickets.filter((t) => t.status === "open").length;
         const running = tickets.filter((t) => t.status === "in_progress").length;
+        const away = repo !== cwd ? ` (${repo})` : "";
         if (open + running > 0) {
           const choice = await ctx.ui.select(
-            `Continue where you left off? (phase ${sess.name ?? ""}: ${open} open / ${running} running)`,
+            `Continue where you left off? (phase ${sess.name ?? ""}${away}: ${open} open / ${running} running)`,
             ["Resume", "Ticket board", "Dismiss"],
           );
           if (choice === "Ticket board") ctx.ui.notify(ticketTable(tickets), "info");
-          else if (choice === "Resume") await openConsole(ctx, cwd);
+          else if (choice === "Resume") await openConsole(ctx, repo);
         }
       }
     }
 
-    startWatcher(ctx, cwd);
+    startWatcher(ctx, repo);
   });
 
   pi.on("session_shutdown", async () => {
