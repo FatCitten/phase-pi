@@ -15,7 +15,7 @@
  *
  * Pure Node stdlib. No training, no harness — just coordination.
  */
-import { mkdirSync, readFileSync, readdirSync, writeFileSync, existsSync, renameSync, unlinkSync } from 'node:fs';
+import { mkdirSync, readFileSync, readdirSync, writeFileSync, existsSync, renameSync, unlinkSync, statSync, openSync, readSync, closeSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { canonicalRepositoryPath, repositoryDomainId, gitSnapshot, nowIso } from './util.mjs';
@@ -36,6 +36,8 @@ export class TicketStore {
     this.artifactDir = join(this.root, 'artifacts');
     this.archiveDir = join(this.root, 'archive');
     for (const d of [this.busDir, this.ticketDir, this.artifactDir, this.archiveDir]) mkdirSync(d, { recursive: true });
+    this._archiveCache = null;   // listArchive memoization (see listArchive)
+    this._archiveCacheKey = null;
     this.controlPath = join(this.busDir, 'control.ndjson');
     this.dataPath = join(this.busDir, 'data.ndjson');
     // The session manifest is the repo-based workspace: auto-created on the
@@ -65,10 +67,21 @@ export class TicketStore {
 
   _nextSeq(path) {
     if (!existsSync(path)) return 1;
+    // Read ONLY the file tail: seq lives in the last line. Reading the whole
+    // file per append made every event O(bus-filesize) — on a 13MB bus that
+    // is a 13MB disk read per event, which compounded the worker-flap flood
+    // (each spam event made all future events slower). Tail keeps O(1).
     try {
-      const lines = readFileSync(path, 'utf8').trim().split('\n').filter(Boolean);
-      const last = JSON.parse(lines[lines.length - 1]);
-      return (Number(last.seq) ?? 0) + 1;
+      const size = statSync(path).size;
+      const len = Math.min(size, 4096);
+      const buf = Buffer.alloc(len);
+      const fd = openSync(path, 'r');
+      try { readSync(fd, buf, 0, len, size - len); } finally { closeSync(fd); }
+      const lines = buf.toString('utf8').split('\n').filter(Boolean);
+      for (let i = lines.length - 1; i >= 0; i--) {
+        try { const last = JSON.parse(lines[i]); if (last && last.seq != null) return (Number(last.seq) || 0) + 1; } catch { /* truncated tail line — fall back to earlier */ }
+      }
+      return 1;
     } catch { return 1; }
   }
 
@@ -241,12 +254,21 @@ export class TicketStore {
     } catch { return null; }
   }
 
-  /** All archived (compacted done) ticket records, oldest first. */
+  /** All archived (compacted done) ticket records, oldest first.
+   *  Memoized by archive-dir mtime: claimable() consults the archive on every
+   *  dep check (see _depsDone), and re-reading + re-parsing every archived
+   *  file per check measured 3.59ms/call vs 0.081ms live-scan (44x). The
+   *  mtime key invalidates on every archive write/delete. */
   listArchive() {
-    if (!existsSync(this.archiveDir)) return [];
-    return readdirSync(this.archiveDir).filter((f) => f.endsWith('.json')).map((f) => {
+    let mtime = 0;
+    try { mtime = statSync(this.archiveDir).mtimeMs; } catch { return []; }
+    if (this._archiveCache && this._archiveCacheKey === mtime) return this._archiveCache;
+    const recs = readdirSync(this.archiveDir).filter((f) => f.endsWith('.json')).map((f) => {
       try { return JSON.parse(readFileSync(join(this.archiveDir, f), 'utf8')); } catch { return null; }
     }).filter(Boolean);
+    this._archiveCache = recs;
+    this._archiveCacheKey = mtime;
+    return recs;
   }
 
   /** Retry a failed ticket: back to open, claim cleared, re-claimable by the
