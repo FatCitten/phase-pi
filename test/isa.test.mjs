@@ -2,13 +2,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   DEFAULT_BUDGETS,
-  ISAAllocator,
   RESOURCES,
-  SYSTEM_PROMPT,
+  allocateFromAsm,
   clampISA,
-  heuristic,
+  defaults,
   parseISA,
-  pickJson,
   toISA,
 } from '../src/allocator.mjs';
 
@@ -38,14 +36,6 @@ test('parseISA: unknown ops ignored, but pure prose throws', () => {
   assert.throws(() => parseISA(''), /no ISA assembly/);
 });
 
-test('pickJson: salvages a JSON answer, bare or wrapped in prose', () => {
-  const d = pickJson('{"agent":"exec","tools":["read"],"tokens":500}');
-  assert.equal(d.agent, 'exec');
-  const wrapped = pickJson('sure! here you go: { "agent": "exec" }');
-  assert.equal(wrapped.agent, 'exec');
-  assert.throws(() => pickJson('nothing here'), /neither ISA assembly nor JSON/);
-});
-
 test('toISA: deterministic, deduped, roundtrips through parseISA', () => {
   const allocation = {
     agent: 'exec',
@@ -61,9 +51,8 @@ test('toISA: deterministic, deduped, roundtrips through parseISA', () => {
   assert.deepEqual(back.tools, ['read', 'edit']);
 });
 
-test('heuristic: ceilings respected, context halved, tools pass through', () => {
-  const a = heuristic({ objective: 'x', tools: ['read', 'test'], budget: { ...DEFAULT_BUDGETS } });
-  assert.equal(a.policy, 'heuristic');
+test('defaults: ceilings respected, context halved, tools pass through', () => {
+  const a = defaults({ objective: 'x', tools: ['read', 'test'], budget: { ...DEFAULT_BUDGETS } });
   assert.equal(a.schema, 'isa-allocation-v1');
   assert.equal(a.agent, 'auto');
   assert.deepEqual(a.tools, ['read', 'test']);
@@ -72,7 +61,7 @@ test('heuristic: ceilings respected, context halved, tools pass through', () => 
 });
 
 test('clampISA: above-ceiling values clamped, foreign agent rejected, tools filtered', () => {
-  const base = heuristic({ objective: 'x', tools: ['read', 'edit'], budget: { ...DEFAULT_BUDGETS } });
+  const base = defaults({ objective: 'x', tools: ['read', 'edit'], budget: { ...DEFAULT_BUDGETS } });
   const out = clampISA(
     base,
     { agent: 'rogue', tools: ['edit', 'rm'], tokens: 10 ** 9, context_tokens: 0.5 },
@@ -85,24 +74,27 @@ test('clampISA: above-ceiling values clamped, foreign agent rejected, tools filt
 });
 
 test('clampISA: zero ceilings stay zero (money, attention)', () => {
-  const base = heuristic({ objective: 'x', tools: [], budget: { ...DEFAULT_BUDGETS } });
+  const base = defaults({ objective: 'x', tools: [], budget: { ...DEFAULT_BUDGETS } });
   const out = clampISA(base, { money_microunits: 1000 }, {});
   assert.equal(out.budget.money_microunits, 0);
 });
 
-test('clampISA: missing values fall back to the heuristic baseline', () => {
-  const base = heuristic({ objective: 'x', tools: ['read'], budget: { ...DEFAULT_BUDGETS } });
-  const out = clampISA(base, { agent: base.agent }, {});
-  assert.equal(out.budget.wall_ms, base.budget.wall_ms);
-  assert.equal(out.policy, 'model');
-});
-
-test('ISAAllocator: heuristic policy emits schema and asm', async () => {
-  const allocator = new ISAAllocator({ policy: 'heuristic' });
-  const out = await allocator.allocate({ objective: 'add rate limiting', tools: ['read'], budget: { ...DEFAULT_BUDGETS } });
-  assert.equal(out.schema, 'isa-allocation-v1');
+test('allocateFromAsm: no asm -> defaults authored allocation', () => {
+  const out = allocateFromAsm({ objective: 'add rate limiting', tools: ['read'], budget: { ...DEFAULT_BUDGETS } }, null);
+  assert.equal(out.author, 'defaults');
   assert.match(out.asm, /^ROUTE /);
   assert.match(out.asm, /ALLOC CONTEXT_TOKENS/);
+});
+
+test('allocateFromAsm: session asm validated, clamped, authored', () => {
+  const out = allocateFromAsm(
+    { objective: 'x', tools: ['read', 'edit', 'test', 'bash'], budget: { ...DEFAULT_BUDGETS } },
+    'ROUTE auto\nALLOC TOKENS 8000\nGRANT read\nGRANT test\n',
+  );
+  assert.equal(out.author, 'session');
+  assert.equal(out.budget.tokens, 8000);
+  assert.deepEqual(out.tools, ['read', 'test']);
+  assert.match(out.asm, /ALLOC TOKENS 8000/);
 });
 
 test('RESOURCES: the six resources in stable order', () => {
@@ -110,11 +102,4 @@ test('RESOURCES: the six resources in stable order', () => {
     RESOURCES.map(([tag]) => tag),
     ['CONTEXT_TOKENS', 'TOKENS', 'WALL_MS', 'TOOL_CALLS', 'MONEY_MICROUNITS', 'HUMAN_ATTENTION_MICROUNITS'],
   );
-});
-
-test('SYSTEM_PROMPT: names the instructions, one rule per line, small', () => {
-  assert.match(SYSTEM_PROMPT, /ROUTE/);
-  assert.match(SYSTEM_PROMPT, /GRANT/);
-  assert.match(SYSTEM_PROMPT, /ALLOC/);
-  assert.ok(SYSTEM_PROMPT.length < 2000);
 });

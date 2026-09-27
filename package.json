@@ -1,7 +1,7 @@
 {
   "name": "isa-pro",
-  "version": "0.1.0",
-  "description": "ISA-PRO — the ISA: a caveman language for AI context to flow in and out. LLM as processor, tokens as bytes. Emit ROUTE / GRANT / ALLOC, clamp to ceilings, log to the bus.",
+  "version": "0.2.0",
+  "description": "ISA-PRO — the ISA: a caveman language for AI context to flow in and out. The session LLM is the processor; the engine clamps, sandboxes, meters, and enforces; the bus is the record.",
   "type": "module",
   "license": "MIT",
   "author": "FatCitten",
@@ -10,7 +10,7 @@
     "llm",
     "agent",
     "assembly",
-    "allocation",
+    "sandbox",
     "budget",
     "event-log",
     "bus"
@@ -20,36 +20,23 @@
   },
   "bin": {
     "isa": "./isa",
-    "isa-alloc": "./bin/isa-alloc.mjs",
+    "isa-begin": "./bin/isa-begin.mjs",
+    "isa-exec": "./bin/isa-exec.mjs",
+    "isa-end": "./bin/isa-end.mjs",
+    "isa-status": "./bin/isa-status.mjs",
     "isa-bus": "./bin/isa-bus.mjs"
   },
   "scripts": {
     "test": "node --test test/",
-    "typecheck": "tsc --noEmit",
     "smoke": "bash examples/smoke-test.sh"
-  },
-  "devDependencies": {
-    "@earendil-works/pi-coding-agent": "*",
-    "@types/node": "^20",
-    "typebox": "*",
-    "typescript": "^5"
   },
   "files": [
     "bin",
     "src",
     "skills",
-    "extensions",
+    ".opencode",
     "docs",
     "isa",
     "README.md"
-  ],
-  "pi": {
-    "extensions": [
-      "./extensions"
-    ],
-    "skills": [
-      "./skills"
-    ],
-    "type": "package"
-  }
+  ]
 }

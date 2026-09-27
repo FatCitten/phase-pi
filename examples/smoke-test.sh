@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ISA-PRO smoke — offline, no agent needed. Exercises the kept core only.
+# ISA-PRO smoke — offline, no agent needed. begin/exec/end roundtrip only.
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PASS=0; FAIL=0
@@ -11,17 +11,27 @@ if node --test "$ROOT/test/" >/dev/null 2>&1; then ok "node --test test/"; else 
 
 HOME_TMP="$(mktemp -d)"
 
-echo "=== 2. isa-alloc (heuristic, offline) ==="
-OUT="$("$ROOT/bin/isa-alloc.mjs" "add rate limiting" --repo "$ROOT" --home "$HOME_TMP" 2>&1)"
-echo "$OUT" | grep -q "ROUTE auto" && ok "ISA emits ROUTE" || no "ISA ROUTE"
-echo "$OUT" | grep -q "GRANT read" && ok "ISA grants read" || no "ISA GRANT read"
-echo "$OUT" | grep -q "ALLOC TOKENS" && ok "ISA allocs TOKENS" || no "ISA ALLOC TOKENS"
+echo "=== 2. begin ==="
+OUT="$("$ROOT/isa" begin "smoke task" --repo "$ROOT" --home "$HOME_TMP" 2>&1)"
+echo "$OUT" | grep -q "RUN R-" && ok "run created" || no "run created"
+echo "$OUT" | grep -q "ALLOC TOKENS" && ok "ISA emitted" || no "ISA emitted"
 
-echo "=== 3. bus roundtrip ==="
-BUS="$("$ROOT/bin/isa-bus.mjs" --home "$HOME_TMP" 2>&1)"
-echo "$BUS" | grep -q "alloc.decision" && ok "bus carries alloc.decision" || no "bus alloc.decision"
-"$ROOT/bin/isa-bus.mjs" emit ping repo=ready --home "$HOME_TMP" >/dev/null 2>&1
-"$ROOT/bin/isa-bus.mjs" --home "$HOME_TMP" | grep -q "sig.ping" && ok "bus carries sig.ping" || no "bus sig.ping"
+echo "=== 3. exec inside the sandbox ==="
+EXEC="$("$ROOT/isa" exec 'node -e "console.log(\"sandboxed-ok\")"' --repo "$ROOT" --home "$HOME_TMP" 2>&1)"
+echo "$EXEC" | grep -q "sandboxed-ok" && ok "exec runs sandboxed" || no "exec sandboxed"
+
+echo "=== 4. end (engine-measured) ==="
+END="$("$ROOT/isa" end --passed --repo "$ROOT" --home "$HOME_TMP" 2>&1)"
+echo "$END" | grep -q "DONE R-" && ok "end reports DONE" || no "end DONE"
+
+echo "=== 5. bus record ==="
+BUS="$("$ROOT/isa" bus --home "$HOME_TMP" 2>&1)"
+echo "$BUS" | grep -q "run.alloc" && ok "bus: run.alloc" || no "bus run.alloc"
+echo "$BUS" | grep -q "run.done" && ok "bus: run.done" || no "bus run.done"
+
+echo "=== 6. pointer cleared ==="
+STATUS="$("$ROOT/isa" status --repo "$ROOT" --home "$HOME_TMP" 2>&1)"
+echo "$STATUS" | grep -q "no active run" && ok "pointer cleared" || no "pointer cleared"
 
 rm -rf "$HOME_TMP"
 

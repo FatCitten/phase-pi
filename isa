@@ -2,13 +2,19 @@
 /**
  * isa — ISA-PRO toolchain entry.
  *
- *   isa alloc "add rate limiting" [options]   -> bin/isa-alloc.mjs
- *   isa bus [emit|watch] ...                  -> bin/isa-bus.mjs
+ *   isa begin <task> [--asm ...] [--ceil K=V ...]   start a run
+ *   isa exec <cmd...>                               run inside the sandbox
+ *   isa end [--passed]                              close the run (measured)
+ *   isa status                                      the program counter
+ *   isa bus [emit|watch] ...                        the log
  *   isa --help
  *
  * Thin dispatcher only. The real code lives in bin/.
  */
-import { main as allocMain, usage as allocUsage } from './bin/isa-alloc.mjs';
+import { main as beginMain, usage as beginUsage } from './bin/isa-begin.mjs';
+import { main as execMain, usage as execUsage } from './bin/isa-exec.mjs';
+import { main as endMain, usage as endUsage } from './bin/isa-end.mjs';
+import { main as statusMain, usage as statusUsage } from './bin/isa-status.mjs';
 import { main as busMain, usage as busUsage } from './bin/isa-bus.mjs';
 
 const [cmd, ...rest] = process.argv.slice(2);
@@ -17,17 +23,24 @@ if (!cmd || cmd === '--help' || cmd === '-h' || cmd === 'help') {
   console.log(
     'isa — ISA-PRO toolchain\n\n' +
     'The ISA is a caveman language for AI context to flow in and out.\n' +
-    'LLM as processor, tokens as bytes. Emit it, clamp it, log it.\n\n' +
-    `${allocUsage()}\n\n${busUsage()}`,
+    'The LLM in this session is the processor. The engine clamps, sandboxes,\n' +
+    'meters, and enforces. The bus is the record.\n\n' +
+    `${beginUsage()}\n\n${execUsage()}\n\n${endUsage()}\n\n${statusUsage()}\n\n${busUsage()}`,
   );
   process.exit(0);
 }
 
-if (cmd === 'alloc') {
-  allocMain(rest).catch((e) => { console.error(e); process.exit(1); });
-} else if (cmd === 'bus') {
-  busMain(rest).catch((e) => { console.error(e); process.exit(1); });
+const table = {
+  begin: beginMain,
+  exec: execMain,
+  end: endMain,
+  status: statusMain,
+  bus: busMain,
+};
+
+if (table[cmd]) {
+  table[cmd](rest).catch((e) => { console.error(e); process.exit(1); });
 } else {
-  console.error(`isa: unknown command ${cmd} (use: isa alloc <task> | isa bus ...)`);
+  console.error(`isa: unknown command ${cmd} (use: isa begin | exec | end | status | bus)`);
   process.exit(64);
 }

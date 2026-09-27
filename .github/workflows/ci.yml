@@ -22,5 +22,3 @@ jobs:
         run: node --test test/
       - name: smoke (offline)
         run: bash examples/smoke-test.sh
-      - name: typecheck extension
-        run: npm run typecheck
