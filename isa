@@ -2,11 +2,11 @@
 /**
  * isa — ISA-PRO toolchain entry.
  *
- *   isa begin <task> [--asm ...] [--ceil K=V ...]   start a run
- *   isa exec <cmd...>                               run inside the sandbox
- *   isa end [--passed]                              close the run (measured)
- *   isa status                                      the program counter
- *   isa bus [emit|watch] ...                        the log
+ *   isa begin <task>             start a run (a sandbox plus a record)
+ *   isa exec <cmd...>            run inside the sandbox (wall-limited)
+ *   isa end [--passed]           close the run (measured)
+ *   isa status                   the run facts
+ *   isa bus [emit|watch] ...     the log
  *   isa --help
  *
  * Thin dispatcher only. The real code lives in bin/.
@@ -22,9 +22,9 @@ const [cmd, ...rest] = process.argv.slice(2);
 if (!cmd || cmd === '--help' || cmd === '-h' || cmd === 'help') {
   console.log(
     'isa — ISA-PRO toolchain\n\n' +
-    'The ISA is a caveman language for AI context to flow in and out.\n' +
-    'The LLM in this session is the processor. The engine clamps, sandboxes,\n' +
-    'meters, and enforces. The bus is the record.\n\n' +
+    'A run is confined, recorded work. The sandbox is the boundary; the\n' +
+    'bus is the log of record. Nothing is planned, nothing is budgeted,\n' +
+    'nothing is enforced beyond the sandbox and the wall limit.\n\n' +
     `${beginUsage()}\n\n${execUsage()}\n\n${endUsage()}\n\n${statusUsage()}\n\n${busUsage()}`,
   );
   process.exit(0);

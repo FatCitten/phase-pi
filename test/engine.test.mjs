@@ -1,11 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Engine } from '../src/engine.mjs';
 
-function tempHome(repo) {
+function tempHome() {
   return mkdtempSync(join(tmpdir(), 'isa-engine-'));
 }
 
@@ -13,34 +13,18 @@ function makeEngine(home) {
   return new Engine({ home, repo: home });
 }
 
-test('begin: creates pointer, sandbox, alloc; logs run.alloc + run.isa', () => {
+test('begin: creates pointer + sandbox, logs sig.run.begin, nothing planned', () => {
   const home = tempHome();
   const engine = makeEngine(home);
-  const { id, alloc, sandbox, pointer } = engine.begin({ task: 'add rate limiting' });
+  const { id, sandbox, pointer } = engine.begin({ task: 'add rate limiting' });
   assert.match(id, /^R-/);
   assert.equal(pointer.task, 'add rate limiting');
   assert.ok(existsSync(sandbox));
-  assert.ok(existsSync(join(home, 'runs', id, 'alloc.json')));
-  assert.equal(alloc.author, 'defaults');
-  assert.equal(alloc.budget.context_tokens, alloc.budget.tokens / 2);
   const control = engine.bus.readControl();
   const data = engine.bus.readData();
-  assert.equal(control[0].type, 'sig.run.alloc');
-  assert.equal(data[0].type, 'sig.run.isa');
-  rmSync(home, { recursive: true, force: true });
-});
-
-test('begin with --asm style asm: session-authored, clamped', () => {
-  const home = tempHome();
-  const engine = makeEngine(home);
-  const { alloc } = engine.begin({
-    task: 'x',
-    asm: 'ROUTE auto\nALLOC TOKENS 5000\nGRANT read\nGRANT test\n',
-    ceilings: { tokens: 8000 },
-  });
-  assert.equal(alloc.author, 'session');
-  assert.equal(alloc.budget.tokens, 5000);
-  assert.deepEqual(alloc.tools, ['read', 'test']);
+  assert.equal(control[0].type, 'sig.run.begin');
+  assert.equal(control[0].task, 'add rate limiting');
+  assert.deepEqual(data, []);
   rmSync(home, { recursive: true, force: true });
 });
 
@@ -56,14 +40,16 @@ test('exec: runs inside the sandbox, writes stay there', async () => {
   rmSync(home, { recursive: true, force: true });
 });
 
-test('exec: wall budget enforced — long child is killed', async () => {
+test('exec: wall safety limit kills a runaway child', async () => {
   const home = tempHome();
   const engine = makeEngine(home);
-  engine.begin({ task: 'wall enforcement', ceilings: { wall_ms: 1500 } });
-  const r = await engine.exec({ cmd: 'sleep 30' });
+  engine.begin({ task: 'wall limit' });
+  const r = await engine.exec({ cmd: 'sleep 30', timeout: 1500 });
   assert.equal(r.killed, true);
   assert.equal(r.code, 124);
   assert.ok(r.wall_ms < 3000);
+  const control = engine.bus.readControl();
+  assert.equal(control[control.length - 1].type, 'sig.run.killed');
   rmSync(home, { recursive: true, force: true });
 });
 
@@ -78,37 +64,33 @@ test('exec: bwrap jail makes the root read-only (when bwrap present)', async (t)
   rmSync(home, { recursive: true, force: true });
 });
 
-test('end: engine-measured, budget-checked, pointer cleared', () => {
+test('end: engine-measured, recorded, pointer cleared', () => {
   const home = tempHome();
   const engine = makeEngine(home);
-  const { id } = engine.begin({ task: 'close clean', ceilings: { wall_ms: 60000 } });
+  const { id } = engine.begin({ task: 'close clean' });
   const r = engine.end({ passed: true, result: 'done' });
   assert.equal(r.passed, true);
-  assert.equal(r.exitCode, 0);
-  assert.deepEqual(r.over, []);
   assert.ok(r.actuals.wall_ms >= 0);
+  assert.ok(!('over' in r.actuals));
   assert.equal(engine.readPointer(), null);
   const control = engine.bus.readControl();
   assert.equal(control[control.length - 1].type, 'sig.run.done');
+  assert.equal(control[control.length - 1].result, 'done');
   rmSync(home, { recursive: true, force: true });
 });
 
-test('end: over-budget wall reports over and exits 2', async () => {
+test('end: failed run records sig.run.failed', () => {
   const home = tempHome();
   const engine = makeEngine(home);
-  engine.begin({ task: 'wall overrun', ceilings: { wall_ms: 400 } });
-  await engine.exec({ cmd: 'sleep 2' }); // killed by wall at ~400ms
-  await new Promise((r) => setTimeout(r, 300)); // a genuine overrun, past the boundary
-  const r = engine.end({ passed: true });
-  assert.deepEqual(r.over, ['wall_ms']);
-  assert.equal(r.exitCode, 2);
+  engine.begin({ task: 'fail clean' });
+  const r = engine.end({ passed: false });
+  assert.equal(r.passed, false);
   const control = engine.bus.readControl();
-  assert.equal(control[control.length - 1].type, 'sig.run.done');
-  assert.ok(control[control.length - 1].over.includes('wall_ms'));
+  assert.equal(control[control.length - 1].type, 'sig.run.failed');
   rmSync(home, { recursive: true, force: true });
 });
 
-test('status: inactive without a run, active with one', () => {
+test('status: inactive without a run, active with run facts', () => {
   const home = tempHome();
   const engine = makeEngine(home);
   assert.equal(engine.status().active, false);
@@ -116,7 +98,10 @@ test('status: inactive without a run, active with one', () => {
   const s = engine.status();
   assert.equal(s.active, true);
   assert.equal(s.task, 'counter');
-  assert.ok(s.remaining > 0);
+  assert.equal(s.id, engine.readPointer().id);
+  assert.ok(s.started_at);
+  assert.equal(s.actuals.exec_count, 0);
+  assert.ok(!('budget' in s));
   rmSync(home, { recursive: true, force: true });
 });
 
@@ -145,5 +130,20 @@ test('exec output lands in the run artifact verbatim', async () => {
   await engine.exec({ cmd: 'echo sandboxed-ok' });
   const artifact = readFileSync(join(home, 'runs', id, 'artifact.log'), 'utf8');
   assert.match(artifact, /sandboxed-ok/);
+  rmSync(home, { recursive: true, force: true });
+});
+
+test('exec records measured facts on the data bus, never enforced', async () => {
+  const home = tempHome();
+  const engine = makeEngine(home);
+  const { id } = engine.begin({ task: 'metering' });
+  await engine.exec({ cmd: 'echo hi' });
+  const data = engine.bus.readData();
+  assert.equal(data[data.length - 1].type, 'sig.run.exec');
+  assert.equal(data[data.length - 1].run, id);
+  assert.equal(data[data.length - 1].killed, false);
+  assert.ok(data[data.length - 1].wall_ms >= 0);
+  const s = engine.status();
+  assert.equal(s.actuals.exec_count, 1);
   rmSync(home, { recursive: true, force: true });
 });

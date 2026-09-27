@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.3.0 — 2026-09-27 — the allocation is gone
+
+The allocation was the last piece of planning theater. `ROUTE` / `GRANT` /
+`ALLOC`, budgets, ceilings, the clamp, over-budget checks, and deny-mode are
+all deleted. What remains: a run is confined, recorded work.
+
+- **The language is deleted** (`src/allocator.mjs`, `test/isa.test.mjs`).
+  `isa begin` takes a task and nothing else. Nothing is planned up front.
+- **The engine** (`src/engine.mjs`): `begin` opens the sandbox and logs
+  `run.begin`; `exec` runs inside the sandbox under a hard wall safety limit
+  (runaway protection, not a budget); `end` measures and records, checking
+  nothing; `status` reports run facts.
+- **The hook** (`.opencode/plugins/isa/`): confinement stays (shell cwd
+  jailed to the sandbox, writes outside sandbox + ledger denied). Deny-mode
+  and budget-exceeded signals are gone. Tool-call and token metering are
+  record-only — written to the ledger and the bus, never enforced.
+- **The bus** signal types change: `run.begin` / `run.done` / `run.failed` /
+  `run.killed` on control; `run.exec` on data. `run.alloc` / `run.isa` /
+  `run.budget.exceeded` are gone.
+- Fix carried from 0.2: the hook spawns a real Node runtime (`$NODE` or
+  `node`), not `process.execPath` — inside the OpenCode host that is the
+  compiled opencode binary and rejected every `isa_*` flag.
+
+Naming is an open question: the allocation *was* the ISA. The name may follow
+in a later strip.
+
 ## 0.2.0 — 2026-09-27 — the processor is the session LLM
 
 The SLM is gone. It was the root problem wearing a new costume: the brain was

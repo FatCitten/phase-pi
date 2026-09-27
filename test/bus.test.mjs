@@ -12,15 +12,15 @@ function tempHome() {
 test('emit/read roundtrip on both buses, separate sequences', () => {
   const home = tempHome();
   const store = new BusStore({ home, repo: '/repo' });
-  const c = store.emit('control', 'alloc.decision', { objective: 'x' });
-  const d = store.emit('data', 'alloc.isa', { isa: 'ROUTE exec' });
-  assert.equal(c.type, 'sig.alloc.decision');
+  const c = store.emit('control', 'note', { objective: 'x' });
+  const d = store.emit('data', 'payload', { blob: 'anything' });
+  assert.equal(c.type, 'sig.note');
   assert.equal(c.seq, 1);
   assert.equal(d.seq, 1); // each bus sequences independently
   assert.equal(store.readControl().length, 1);
   assert.equal(store.readData().length, 1);
   assert.equal(store.readControl()[0].objective, 'x');
-  assert.equal(store.readData()[0].isa, 'ROUTE exec');
+  assert.equal(store.readData()[0].blob, 'anything');
   rmSync(home, { recursive: true, force: true });
 });
 

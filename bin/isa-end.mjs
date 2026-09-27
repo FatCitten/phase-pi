@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
  * isa-end — close the active run. The engine measures wall_ms itself and
- * checks every budget line it has real numbers for. Exit 0 clean, 2
- * over-budget or failed.
+ * records the outcome. Nothing is checked against anything; the record is
+ * the truth.
  */
 import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -41,9 +41,8 @@ export async function main(argv = process.argv.slice(2)) {
 
   const engine = new Engine({ home: opt.home, repo: opt.repo });
   const r = engine.end({ passed: opt.passed, result: opt.result, artifact: opt.artifact });
-  console.log(`${r.passed ? 'DONE' : 'FAIL'} ${r.id} — wall ${r.actuals.wall_ms}ms${r.over.length ? ` · OVER: ${r.over.join(',')}` : ' · within budget'}`);
+  console.log(`${r.passed ? 'DONE' : 'FAIL'} ${r.id} — wall ${r.actuals.wall_ms}ms`);
   console.log(JSON.stringify(r.actuals, null, 2));
-  process.exitCode = r.exitCode;
 }
 
 function invokedDirectly() {

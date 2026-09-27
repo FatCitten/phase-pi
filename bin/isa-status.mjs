@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * isa-status — the program counter: budget vs actuals so far, wall remaining.
+ * isa-status — the run facts: what is running, for how long, what it has done.
  */
 import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -10,7 +10,7 @@ import { Engine } from '../src/engine.mjs';
 const SELF = fileURLToPath(import.meta.url);
 
 export function usage() {
-  return `isa status — the program counter of the active run
+  return `isa status — the run facts: what is running, for how long, what it has done
 
 Usage:
   isa status [options]
@@ -41,15 +41,13 @@ export async function main(argv = process.argv.slice(2)) {
     return;
   }
   if (opt.json) { console.log(JSON.stringify(s, null, 2)); return; }
-  const { actuals, budget, remaining } = s;
-  const row = (name, used, cap) => `${name.padEnd(14)} ${String(used ?? '-').padEnd(10)} / ${cap}${used != null && Number(used) > Number(cap) ? '  OVER' : ''}`;
+  const { actuals } = s;
   console.log(`RUN ${s.id} — ${s.task}`);
   console.log(`sandbox: ${s.sandbox}`);
-  console.log(`elapsed: ${actuals.wall_ms}ms`);
-  console.log(`  ${row('wall_ms', actuals.wall_ms, budget.wall_ms)}   remaining ${remaining}ms`);
-  console.log(`  ${row('tool_calls', actuals.tool_calls, budget.tool_calls)}${actuals.tool_calls === null ? '   (harness hook inactive)' : ''}`);
-  console.log(`  ${row('tokens', actuals.tokens, budget.tokens)}${actuals.tokens === null ? '   (harness hook inactive)' : ''}`);
-  console.log(`  ${row('exec_count', actuals.exec_count, '-')}`);
+  console.log(`started: ${s.started_at}`);
+  console.log(`elapsed: ${actuals.wall_ms}ms · exec_count ${actuals.exec_count}`);
+  console.log(`tool_calls: ${actuals.tool_calls === null ? '- (harness hook inactive)' : actuals.tool_calls}`);
+  console.log(`tokens: ${actuals.tokens === null ? '- (harness hook inactive)' : actuals.tokens}`);
 }
 
 function invokedDirectly() {

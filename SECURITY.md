@@ -1,27 +1,29 @@
 # Security
 
-Phase's only responsibility is to decide *how* work should be allocated and
-coordinated. Keep the trust boundary narrow and explicit.
+ISA-PRO's only responsibility is to confine work to a run's sandbox and keep
+an honest record. The trust boundary is narrow and explicit.
 
 ## Principles
 
-- **Project facts stay in the project.** The model sees allocation state
-  (features, budget ceiling, allowed tools) and nothing else. Project source,
-  secrets, and credentials are never sent to the model endpoint.
-- **Bounded output.** Every allocation decision from the model is clamped to the
-  caller's declared ceiling. A compromised or confused model cannot grant tools
-  or budgets outside what the caller allowed; it can only choose within bounds.
-- **Heuristic fallback.** If the model endpoint is unreachable, Phase degrades
-  to a deterministic heuristic. It never blocks on the network.
-- **Bundled Pi extension runs with your full permissions** (like any Pi
-  extension). It shells out to the phase CLIs only. Never point `PHASE_ROOT` or
-  the model base URL at untrusted content.
+- **The sandbox is the boundary.** While a run is active, writes outside the
+  run's sandbox and the ledger (`.isa/`) are denied by the harness hook.
+  `isa exec` runs inside a bwrap jail when available: read-only root, write
+  only to the sandbox, fresh `/tmp`. Without bwrap it degrades to plain
+  confinement (cwd jailed, env stripped) — never silently unconfined.
+- **Measured, never self-reported.** Wall-time and exec count come from the
+  engine's clock; tool calls and tokens from the harness hooks. The record
+  contains only measured facts; nothing trusts a claim.
+- **The bus is append-only.** The ledger and the bus are writable by design —
+  they are the record. Replay is truth; nothing else is trusted state.
+- **The plugin runs with your session's permissions** (like any OpenCode
+  plugin). It shells out to the `isa` CLIs via a real Node runtime only.
+  Never point `ISA_ROOT`, `ISA_HOME`, or `NODE` at untrusted content.
 
-## Model endpoint
+## Confinement honesty
 
-The chat-completions endpoint is configured via `PHASE_SLM_BASE_URL`
-(`PHASE_LLM_BASE_URL` for the chat/orchestration brain). Use a local, trusted
-endpoint (for example Ollama on `http://localhost:11434/v1`).
+bwrap is used when present, plain confinement otherwise. The run record says
+which kind applied on every `run.exec` event — a reader can always tell
+whether the jail was real.
 
 ## Reporting
 

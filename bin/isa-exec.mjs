@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 /**
  * isa-exec — run a command inside the active run's sandbox. Wall-time is
- * enforced by the engine: the child gets only the remaining budget and is
- * killed when it is gone. Output is captured to the run artifact + data bus.
+ * bounded by a hard safety limit (default 15 min, or --timeout): the child
+ * is killed when the limit is gone. Output is captured to the run artifact +
+ * data bus. Measured, never self-reported.
  */
 import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -20,7 +21,7 @@ Usage:
 Options:
   --home <path>      ISA home                 (default: $ISA_HOME or ./.isa)
   --repo <path>      working dir of the run   (default: cwd)
-  --timeout <ms>     cap for this command     (default: remaining wall budget)
+  --timeout <ms>     safety cap for this command (default: 15 min)
   --help, -h         show this help`;
 }
 
@@ -41,7 +42,7 @@ export async function main(argv = process.argv.slice(2)) {
   const engine = new Engine({ home: opt.home, repo: opt.repo });
   const r = await engine.exec({ cmd, timeout: opt.timeout });
   process.stdout.write(r.out.endsWith('\n') ? r.out : r.out + '\n');
-  console.error(`isa exec: ${r.kind} ${r.killed ? 'KILLED (wall budget)' : `exit ${r.code}`} in ${r.wall_ms}ms`);
+  console.error(`isa exec: ${r.kind} ${r.killed ? 'KILLED (wall limit)' : `exit ${r.code}`} in ${r.wall_ms}ms`);
   process.exitCode = r.killed ? 124 : r.code;
 }
 

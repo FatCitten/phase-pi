@@ -1,36 +1,41 @@
 /**
  * ISA-PRO — the engine.
  *
- * The runtime side of the contract: runs, sandboxes, measurement, enforcement.
- * The processor (the session LLM) proposes; the engine disposes.
+ * A run is confined, recorded work. No budgets, no allocation, no language,
+ * no deny-mode. The engine provides three things only:
  *
- *   begin    task + ceilings (+ the LLM's own ISA text) -> validated
- *            allocation, a per-run sandbox dir, and the runs pointer the
- *            harness hook reads.
- *   exec     run a command INSIDE the sandbox. Wall-clock is enforced by the
- *            engine itself: the child gets only the remaining budget and is
- *            killed when it is gone. Measured, never self-reported.
- *   end      the engine measures wall_ms itself, checks every budget line,
- *            and writes the outcome. Exit 0 clean, 2 over-budget.
- *   status   the program counter: budget vs actuals so far.
+ *   begin    task -> a per-run sandbox dir and the runs pointer the harness
+ *            hook reads. The run is recorded on the bus; nothing is planned.
+ *   exec     run a command INSIDE the sandbox. Wall-clock is bounded by a
+ *            hard safety limit (not a budget): the child is killed when the
+ *            limit is gone. Measured, never self-reported.
+ *   end      the engine measures wall_ms itself, records the outcome, and
+ *            clears the pointer. Nothing is checked against anything.
+ *   status   the run facts: what is running, for how long, what it has done.
+ *
+ * Measurement is record-only: wall_ms, exec_count, and (when the harness
+ * hook has real numbers) tool_calls and tokens are written to the ledger and
+ * the bus as data. They are never enforced.
  *
  * Sandbox: bubblewrap (bwrap) jail when installed — read-only root, write only
  * to the run's sandbox dir, fresh /tmp — else plain confinement (cwd jailed,
  * env stripped, timeout enforced). Never Docker-required.
  *
- * State: .isa/runs/<id>/ (alloc.json, sandbox/, actuals.json, artifact.log)
- * and .isa/runs/current.json — the pointer the harness hook consumes. No
- * daemon, no long-lived process; a killed engine leaves a pointer that `end`
- * or a new `begin` supersedes.
+ * State: .isa/runs/<id>/ (actuals.json, sandbox/, artifact.log) and
+ * .isa/runs/current.json — the pointer the harness hook consumes. No daemon,
+ * no long-lived process; a killed engine leaves a pointer that `end` or a new
+ * `begin` supersedes.
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync, appendFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { allocateFromAsm, DEFAULT_BUDGETS, RESOURCES } from './allocator.mjs';
 import { BusStore } from './bus.mjs';
 
 const BWRAP_CANDIDATES = ['/usr/bin/bwrap', '/usr/local/bin/bwrap', '/bin/bwrap'];
+
+/** Hard safety limit for a single exec — pure runaway protection, not a budget. */
+export const EXEC_TIMEOUT_MS = 15 * 60 * 1000;
 
 function bwrapAvailable() {
   if (BWRAP_CANDIDATES.some((p) => existsSync(p))) return true;
@@ -48,7 +53,6 @@ export class Engine {
   }
 
   _runDir(id) { return join(this.runsDir, id); }
-  _allocPath(id) { return join(this._runDir(id), 'alloc.json'); }
   _actualsPath(id) { return join(this._runDir(id), 'actuals.json'); }
   _artifactPath(id) { return join(this._runDir(id), 'artifact.log'); }
   sandboxPath(id) { return join(this._runDir(id), 'sandbox'); }
@@ -70,9 +74,6 @@ export class Engine {
     mkdirSync(this._runDir(id), { recursive: true });
     writeFileSync(this._actualsPath(id), JSON.stringify(actuals, null, 2));
   }
-  readAlloc(id) {
-    try { return JSON.parse(readFileSync(this._allocPath(id), 'utf8')); } catch { return null; }
-  }
 
   hasBwrap() {
     if (this._bwrap === null) this._bwrap = bwrapAvailable();
@@ -80,41 +81,24 @@ export class Engine {
   }
 
   /**
-   * Start a run. Task shape: { task, asm?, ceilings?, agent?, tools? }.
-   * Returns { id, alloc, sandbox, pointer }.
+   * Start a run. Nothing is planned: no budget, no grants, no scope. The run
+   * is a sandbox plus a record. Returns { id, sandbox, pointer }.
    */
-  begin({ task, asm = null, ceilings = null, agent = 'auto', tools = ['read', 'edit', 'test', 'bash'] }) {
+  begin({ task }) {
     if (!task || !String(task).trim()) throw new Error('a task is required');
-    const budget = { ...DEFAULT_BUDGETS };
-    if (ceilings && typeof ceilings === 'object') {
-      for (const [key, v] of Object.entries(ceilings)) {
-        if (budget[key] !== undefined && Number.isFinite(Number(v))) budget[key] = Math.max(0, Math.round(Number(v)));
-      }
-    }
-    const alloc = allocateFromAsm({ objective: String(task), cwd: this.repo, agent, tools, budget }, asm);
     const id = `R-${randomUUID().slice(0, 8).toUpperCase()}`;
     mkdirSync(this.sandboxPath(id), { recursive: true });
-    writeFileSync(this._allocPath(id), JSON.stringify(alloc, null, 2));
     const pointer = {
       id,
       task: String(task),
       repo: this.repo,
       started_at: new Date().toISOString(),
-      agent: alloc.agent,
-      tools: alloc.tools,
-      budget: alloc.budget,
       sandbox: this.sandboxPath(id),
     };
     this.writePointer(pointer);
-    this.writeActuals(id, { status: 'running', started_at: pointer.started_at, wall_ms: 0, exec_count: 0, tool_calls: null, tokens: null, over: [] });
-    this.bus.emit('control', 'run.alloc', { run: id, task: pointer.task, author: alloc.author, agent: alloc.agent, tools: alloc.tools, budget: alloc.budget });
-    this.bus.emit('data', 'run.isa', { run: id, isa: alloc.asm });
-    return { id, alloc, sandbox: this.sandboxPath(id), pointer };
-  }
-
-  remainingWallMs(pointer) {
-    const used = Date.now() - Date.parse(pointer.started_at);
-    return Math.max(0, Number(pointer.budget.wall_ms) - used);
+    this.writeActuals(id, { status: 'running', started_at: pointer.started_at, wall_ms: 0, exec_count: 0, tool_calls: null, tokens: null });
+    this.bus.emit('control', 'run.begin', { run: id, task: pointer.task });
+    return { id, sandbox: this.sandboxPath(id), pointer };
   }
 
   /**
@@ -145,20 +129,16 @@ export class Engine {
   }
 
   /**
-   * Run a command inside the active run's sandbox. Wall-time enforced: the
-   * child receives only the remaining budget and is SIGKILLed when it is
-   * gone. Output is captured to the run artifact and the data bus.
-   * Returns { code, killed, wall_ms, kind, out }.
+   * Run a command inside the active run's sandbox. Wall-time bounded by a
+   * hard safety limit: the child gets at most `timeout` (default
+   * EXEC_TIMEOUT_MS) and is SIGKILLed when it is gone. Output is captured to
+   * the run artifact and the data bus. Returns { code, killed, wall_ms,
+   * kind, out }.
    */
   async exec({ cmd, timeout = null }) {
     const pointer = this.readPointer();
     if (!pointer) throw new Error('no active run — isa begin first');
-    const remaining = this.remainingWallMs(pointer);
-    if (remaining <= 0) {
-      this.bus.emit('control', 'run.wall.exceeded', { run: pointer.id });
-      throw new Error(`wall budget exhausted (${pointer.budget.wall_ms}ms)`);
-    }
-    const limit = timeout == null ? remaining : Math.min(Number(timeout), remaining);
+    const limit = Math.min(Number(timeout) || EXEC_TIMEOUT_MS, EXEC_TIMEOUT_MS);
     const started = Date.now();
     const { child, kind } = this._jailSpawn(cmd, pointer.sandbox);
     let out = '';
@@ -180,14 +160,14 @@ export class Engine {
     this.writeActuals(pointer.id, actuals);
     try { appendFileSync(this._artifactPath(pointer.id), `$ ${cmd}\n${out}${out.endsWith('\n') ? '' : '\n'}\n`); } catch { /* artifact best-effort */ }
     this.bus.emit('data', 'run.exec', { run: pointer.id, cmd, kind, code: killed ? null : code, killed, wall_ms: wall, out_len: out.length });
+    if (killed) this.bus.emit('control', 'run.killed', { run: pointer.id, limit_ms: limit });
     return { code: killed ? 124 : code, killed, wall_ms: wall, kind, out };
   }
 
   /**
-   * Close the run. The engine measures wall_ms itself and checks every budget
-   * line it has real numbers for (wall, and hook-metered tool_calls/tokens
-   * when present — never estimated as real). Returns { id, passed, actuals,
-   * over, exitCode }.
+   * Close the run. The engine measures wall_ms itself and records the
+   * outcome; nothing is checked against anything. Returns { id, passed,
+   * actuals }.
    */
   end({ passed, result = null, artifact = null }) {
     const pointer = this.readPointer();
@@ -197,14 +177,7 @@ export class Engine {
       wall_ms: Date.now() - Date.parse(pointer.started_at),
       ended_at: new Date().toISOString(),
     };
-    const over = [];
-    for (const [, key] of RESOURCES) {
-      const budget = Number(pointer.budget[key]);
-      const used = key === 'wall_ms' ? Number(actuals.wall_ms) : (actuals[key] === null ? null : Number(actuals[key]));
-      if (used !== null && Number.isFinite(used) && Number.isFinite(budget) && used > budget) over.push(key);
-    }
     actuals.status = passed ? 'done' : 'failed';
-    actuals.over = over;
     this.writeActuals(pointer.id, actuals);
     this.clearPointer();
     this.bus.emit('control', passed ? 'run.done' : 'run.failed', {
@@ -214,14 +187,14 @@ export class Engine {
       result,
       artifact,
       wall_ms: actuals.wall_ms,
+      exec_count: actuals.exec_count,
       tool_calls: actuals.tool_calls,
       tokens: actuals.tokens,
-      over,
     });
-    return { id: pointer.id, passed: !!passed, actuals, over, exitCode: passed && over.length === 0 ? 0 : 2 };
+    return { id: pointer.id, passed: !!passed, actuals };
   }
 
-  /** The program counter: budget vs actuals so far. */
+  /** The run facts: what is running, for how long, what it has done. */
   status() {
     const pointer = this.readPointer();
     if (!pointer) return { active: false };
@@ -231,9 +204,8 @@ export class Engine {
       active: true,
       id: pointer.id,
       task: pointer.task,
-      budget: pointer.budget,
+      started_at: pointer.started_at,
       actuals,
-      remaining: Math.max(0, Number(pointer.budget.wall_ms) - wall),
       sandbox: pointer.sandbox,
     };
   }

@@ -1,22 +1,25 @@
 # ISA-PRO
 
-**The ISA: a caveman language for AI context to flow in and out.**
+**A run is confined, recorded work.**
 
-The LLM in this session is the processor — no SLM, no side model, no side
-endpoint. It writes `ROUTE` / `GRANT` / `ALLOC`; the engine clamps it; the
-harness confines and meters the work; the bus keeps the record.
+No budgets, no allocation, no language, no deny-mode. The LLM in this session
+does work inside a per-run sandbox; the engine confines it and bounds wall-time
+with a hard safety limit; measurement is record-only; the bus is the log of
+record.
 
 ```
-isa begin "add rate limiting" [--asm "ALLOC TOKENS 8000 ..."] [--ceil K=V ...]
+isa begin "add rate limiting"      # a sandbox plus a record — nothing planned
 isa exec  "node --test test/"
-isa status
+isa status                          # the run facts
 isa end   --passed
+isa bus                             # the record
 ```
 
 While a run is active, the harness hook confines every write to the run's
-sandbox and enforces the budgets — wall-time is engine-measured and
-engine-killed, tool calls and tokens are metered for real, and an exceeded
-line physically stops work.
+sandbox. Nothing is budgeted and nothing is enforced beyond the sandbox and
+the wall limit — wall-time and exec count are measured by the engine, tool
+calls and tokens are metered by the hook when real numbers exist, and all of
+it is written to the bus as data, never as a stop.
 
 ## Install
 
@@ -36,23 +39,21 @@ cd phase-pi
 
 | piece | where | role |
 |---|---|---|
-| the language | `docs/isa.md`, `src/allocator.mjs` | parse, render, clamp |
-| the engine | `src/engine.mjs`, `bin/` | runs, sandbox, wall enforcement, measurement |
-| the hook | `.opencode/plugins/isa/` | native tools + metering + confinement + deny-mode |
+| the engine | `src/engine.mjs`, `bin/` | runs, sandbox, wall safety limit, measurement |
+| the hook | `.opencode/plugins/isa/` | native tools + confinement + record-only metering |
 | the bus | `src/bus.mjs` | the log — `control.ndjson` / `data.ndjson` |
 
 The harness hook autoloads from `.opencode/plugins/`. Its one dependency
 (`@opencode/plugin`) is a devDependency — `npm install` in this repo
 provisions it. For sessions outside this repo, link or copy the plugin dir
 into your own `~/.opencode/plugins/` and keep the dependency installed where
-the hook resolves it (ISA-PRO is built for the session LLM to use on itself —
-that is the point).
+the hook resolves it.
 
 ## What this is not
 
-No tickets, no schedulers, no workers, no reviewers, no SLM, no pretend
-physics. A prior version built all of that and failed; this keeps the three
-ideas that work — the ISA, the clamp, the bus — and gives them teeth.
+No tickets, no schedulers, no workers, no reviewers, no SLM, no budgets, no
+pretend physics. A prior version built all of that and failed; this keeps the
+two ideas that work — the sandbox and the bus — and drops the rest.
 
 ## License
 

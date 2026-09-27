@@ -14,7 +14,6 @@ HOME_TMP="$(mktemp -d)"
 echo "=== 2. begin ==="
 OUT="$("$ROOT/isa" begin "smoke task" --repo "$ROOT" --home "$HOME_TMP" 2>&1)"
 echo "$OUT" | grep -q "RUN R-" && ok "run created" || no "run created"
-echo "$OUT" | grep -q "ALLOC TOKENS" && ok "ISA emitted" || no "ISA emitted"
 
 echo "=== 3. exec inside the sandbox ==="
 EXEC="$("$ROOT/isa" exec 'node -e "console.log(\"sandboxed-ok\")"' --repo "$ROOT" --home "$HOME_TMP" 2>&1)"
@@ -26,7 +25,7 @@ echo "$END" | grep -q "DONE R-" && ok "end reports DONE" || no "end DONE"
 
 echo "=== 5. bus record ==="
 BUS="$("$ROOT/isa" bus --home "$HOME_TMP" 2>&1)"
-echo "$BUS" | grep -q "run.alloc" && ok "bus: run.alloc" || no "bus run.alloc"
+echo "$BUS" | grep -q "run.begin" && ok "bus: run.begin" || no "bus run.begin"
 echo "$BUS" | grep -q "run.done" && ok "bus: run.done" || no "bus run.done"
 
 echo "=== 6. pointer cleared ==="
