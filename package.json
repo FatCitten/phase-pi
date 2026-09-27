@@ -1,46 +1,32 @@
 {
-  "name": "phase-pi",
-  "version": "2.2.0",
-  "description": "phase — Pi-native. Turns human intent into a bounded plan and drives concurrent agents through a control+data bus + atomic ticket system. Bundled Pi tools + skill; runs only in the Pi agent.",
+  "name": "isa-pro",
+  "version": "0.1.0",
+  "description": "ISA-PRO — the ISA: a caveman language for AI context to flow in and out. LLM as processor, tokens as bytes. Emit ROUTE / GRANT / ALLOC, clamp to ceilings, log to the bus.",
   "type": "module",
   "license": "MIT",
   "author": "FatCitten",
   "keywords": [
-    "pi-package",
-    "pi",
-    "agent",
-    "agents",
-    "orchestration",
-    "coordination",
-    "ticketing",
-    "dag",
+    "isa",
     "llm",
-    "slm",
-    "workflow"
+    "agent",
+    "assembly",
+    "allocation",
+    "budget",
+    "event-log",
+    "bus"
   ],
   "engines": {
     "node": ">=20"
   },
   "bin": {
-    "phase": "./bin/phase.js",
-    "phase-alloc": "./bin/phase-alloc.mjs",
-    "phase-worker": "./bin/phase-worker.mjs",
-    "phase-schedule": "./bin/phase-schedule.mjs",
-    "phase-orchestrate": "./bin/phase-orchestrate.mjs",
-    "phase-chat": "./bin/phase-chat.mjs",
-    "phase-chatroom": "./bin/phase-chatroom.mjs",
-    "phase-bus": "./bin/phase-bus.mjs",
-    "phase-reconcile": "./bin/phase-reconcile.mjs",
-    "phase-taste": "./bin/phase-taste.mjs",
-    "phase-role": "./bin/phase-role.mjs"
+    "isa": "./isa",
+    "isa-alloc": "./bin/isa-alloc.mjs",
+    "isa-bus": "./bin/isa-bus.mjs"
   },
   "scripts": {
-    "orch": "node bin/phase-orchestrate.mjs",
-    "typecheck": "tsc --noEmit"
-  },
-  "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "*",
-    "typebox": "*"
+    "test": "node --test test/",
+    "typecheck": "tsc --noEmit",
+    "smoke": "bash examples/smoke-test.sh"
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "*",
@@ -51,13 +37,11 @@
   "files": [
     "bin",
     "src",
-    "examples",
     "skills",
     "extensions",
-    "install.sh",
-    "phase",
-    "README.md",
-    "phase.taste.mjs"
+    "docs",
+    "isa",
+    "README.md"
   ],
   "pi": {
     "extensions": [
@@ -67,8 +51,5 @@
       "./skills"
     ],
     "type": "package"
-  },
-  "dependencies": {
-    "@earendil-works/pi-tui": "^0.87.1"
   }
 }

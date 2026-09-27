@@ -1,97 +1,51 @@
-# phase · Pi
+# ISA-PRO
 
-Plan intent. Run agents. Only in **Pi**.
+**The ISA: a caveman language for AI context to flow in and out.**
 
-`phase` is a Pi package. Run it → Pi installs phase → phase works.
+LLM as processor, tokens as bytes. You emit `ROUTE` / `GRANT` / `ALLOC` lines;
+the runtime clamps them to ceilings; the bus keeps the log.
 
+## Install
+
+```bash
+npm i -g isa-pro
 ```
-curl -fsSL https://raw.githubusercontent.com/FatCitten/phase-pi/main/install.sh | bash
-```
 
-Or local:
+Or run from source (Node >= 20):
 
 ```bash
 git clone https://github.com/FatCitten/phase-pi.git
 cd phase-pi
-./phase
+./isa --help
 ```
 
-Or npm:
+## Use
 
 ```bash
-npm i -g phase-pi
-phase
+isa alloc "add rate limiting"                  # deterministic heuristic, offline
+isa alloc "add rate limiting" --policy model    # the LLM emits the ISA, clamped
+isa bus                                        # tail of the control bus
+isa bus emit note repo=ready                   # append a signal
 ```
 
-All do the same: **ensure Pi, install phase, open Pi**. Nothing else.
+The allocation prints as JSON + ISA text and is logged to `.isa/bus/`
+(`control.ndjson` for decisions, `data.ndjson` for payloads). The bus is a log,
+not a state machine: anything may emit, everything is kept, replay is truth.
 
-**Safe to re-run.** Idempotent — if phase is already installed it changes
-nothing. Non-destructive — backs up Pi settings, writes atomically, and never
-spawns a nested Pi (so it won't brick your live session).
+## What this is
 
-## What you get
+`docs/isa.md` is the design — read that first. `src/allocator.mjs` assembles
+and clamps; `src/bus.mjs` is the log; `bin/` are thin CLIs. `extensions/` and
+`skills/` carry the minimal agent bridge; its final shape is a design-period
+question.
 
-Inside Pi, phase adds 4 tools + a skill:
+## What this is not
 
-| Tool | Does |
-| --- | --- |
-| `phase_allocate` | Task → plan (route, tools, budget, ISA) |
-| `phase_orchestrate` | Goal → tickets → workers → review → RETRY/ADD/STOP |
-| `phase_schedule` | Run tickets (parallel / pipeline / DAG) |
-| `phase_bus_tickets` | Live ticket status |
-
-Plus `/phase` skill: work within granted tools & budget.
-
-The brain is **your model** — Pi's live model & endpoint.
-
-```
-phase_allocate "add rate limiting"
-phase_orchestrate "ship offline auth"
-```
-
-## Round review with Jev (zero-param geometry)
-
-`phase_orchestrate`'s round review is **exact geometry over the tickets
-themselves** — no model, no network, no API key:
-
-ticket states are phases on a circle (`passed→0`, `failed→π`); the round is their
-superposition; the readout against the "done" anchor yields `goal_satisfied` as
-the **exact passed-fraction**. All done → STOP; fixable failures → RETRY;
-unfixable failures → the generative model WRITES replacement work; 50/50 →
-honestly ambiguous.
-
-The opinionated parts are dials, not weights — edit `phase.taste.mjs`:
-
-```js
-export const TASTE = {
-  bands: { yes: 0.72, no: 0.28 },   // alignment → YES / NO / UNKNOWN
-  retry: { maxAttempts: 2 },        // geometric retry budget per ticket
-  followup: { maxPerRound: 3 },     // replacement work the LLM may write
-  stop: { requireAllDone: true },   // false = "ship with known-broken residue"
-};
-```
-
-Architecture comparison against hosted Jev's published numbers:
-`docs/jev-architecture-comparison.md` · bench: `node bench/jev-compare.mjs`.
-
-## Why Pi-only
-
-Phase is the coordination servant. Pi is the agent. One pairing, one target.
-No CLI-to-the-world, no MCP, no adapters. Later versions may grow them.
-
-## Backend
-
-`bin/` + `src/` power the tools. Internal. Not a product.
-`examples/smoke-test.sh` checks them, offline:
-
-```bash
-bash examples/smoke-test.sh
-```
-
-## Docs
-
-- [INSTALL](README.md) · [CONTRIBUTING](CONTRIBUTING.md) · [SECURITY](SECURITY.md) · [CHANGELOG](CHANGELOG.md)
+No tickets, no schedulers, no workers, no reviewers, no state machines, no
+pretend physics. A prior version (phase-pi) built all of that and failed; this
+repo keeps the two ideas that worked — the ISA and the bus — and deletes the
+rest.
 
 ## License
 
-[MIT](LICENSE)
+MIT

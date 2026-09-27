@@ -1,0 +1,33 @@
+#!/usr/bin/env node
+/**
+ * isa — ISA-PRO toolchain entry.
+ *
+ *   isa alloc "add rate limiting" [options]   -> bin/isa-alloc.mjs
+ *   isa bus [emit|watch] ...                  -> bin/isa-bus.mjs
+ *   isa --help
+ *
+ * Thin dispatcher only. The real code lives in bin/.
+ */
+import { main as allocMain, usage as allocUsage } from './bin/isa-alloc.mjs';
+import { main as busMain, usage as busUsage } from './bin/isa-bus.mjs';
+
+const [cmd, ...rest] = process.argv.slice(2);
+
+if (!cmd || cmd === '--help' || cmd === '-h' || cmd === 'help') {
+  console.log(
+    'isa — ISA-PRO toolchain\n\n' +
+    'The ISA is a caveman language for AI context to flow in and out.\n' +
+    'LLM as processor, tokens as bytes. Emit it, clamp it, log it.\n\n' +
+    `${allocUsage()}\n\n${busUsage()}`,
+  );
+  process.exit(0);
+}
+
+if (cmd === 'alloc') {
+  allocMain(rest).catch((e) => { console.error(e); process.exit(1); });
+} else if (cmd === 'bus') {
+  busMain(rest).catch((e) => { console.error(e); process.exit(1); });
+} else {
+  console.error(`isa: unknown command ${cmd} (use: isa alloc <task> | isa bus ...)`);
+  process.exit(64);
+}

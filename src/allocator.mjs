@@ -1,30 +1,61 @@
-import { PHASE_ARCHITECTURE_SEED, seedHash, seedSystemPrompt } from './phase-seeds.mjs';
-import { encodeAllocationState } from './phase-features.mjs';
+/**
+ * ISA-PRO — the ISA assembler.
+ *
+ * The ISA is a caveman language for AI context to flow in and out. The LLM is
+ * the processor; its context window is memory; tokens are bytes; an ISA
+ * instruction is the smallest unit of meaning worth spending tokens on.
+ *
+ * Two assemblers:
+ *   heuristic — deterministic, offline. Budgets from the caller's ceilings,
+ *     context halved (smallest context likely to finish). The fallback, not
+ *     the product.
+ *   model     — the LLM emits ROUTE / GRANT / ALLOC lines, streamed over an
+ *     OpenAI-compatible endpoint. Every emitted value is clamped to the
+ *     caller's ceilings. The clamp is the runtime disposing.
+ *
+ * Pure Node stdlib. No training, no state machine, no judgment — assembly in,
+ * a validated allocation out.
+ */
 import { resolveProvider } from './provider.mjs';
 
-const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
-const pickJson = (raw) => {
-  const s = String(raw ?? '').trim();
-  try { return JSON.parse(s); } catch { /* fall through to brace extraction */ }
-  const m = s.match(/\{[\s\S]*\}/);
-  if (!m) throw new Error('allocator model returned no JSON object');
-  return JSON.parse(m[0]);
-};
-
-const RESOURCES = [
-  ['CONTEXT_TOKENS', 'context_tokens'], ['TOKENS', 'tokens'],
-  ['WALL_MS', 'wall_ms'], ['TOOL_CALLS', 'tool_calls'],
-  ['MONEY_MICROUNITS', 'money_microunits'], ['HUMAN_ATTENTION_MICROUNITS', 'human_attention_microunits']
+export const RESOURCES = [
+  ['CONTEXT_TOKENS', 'context_tokens'],
+  ['TOKENS', 'tokens'],
+  ['WALL_MS', 'wall_ms'],
+  ['TOOL_CALLS', 'tool_calls'],
+  ['MONEY_MICROUNITS', 'money_microunits'],
+  ['HUMAN_ATTENTION_MICROUNITS', 'human_attention_microunits'],
 ];
 
+export const DEFAULT_BUDGETS = Object.freeze({
+  context_tokens: 32000,
+  tokens: 32000,
+  wall_ms: 15 * 60 * 1000,
+  tool_calls: 48,
+  money_microunits: 0,
+  human_attention_microunits: 0,
+});
+
+/** The model's prompt. One rule per line, no priors, no theater. */
+export const SYSTEM_PROMPT = [
+  'You are an ISA assembler. You do not write project code and you do not invent project facts.',
+  'Emit only ISA assembly — one instruction per line, nothing else.',
+  'Instructions:',
+  '  ROUTE <agent>          the agent that runs the task',
+  '  GRANT <tool>           grant one tool (repeat the line for more)',
+  '  ALLOC <RESOURCE> <n>   budget for a resource, never above the given ceiling',
+  'Resources: CONTEXT_TOKENS, TOKENS, WALL_MS, TOOL_CALLS, MONEY_MICROUNITS, HUMAN_ATTENTION_MICROUNITS.',
+  'No prose, no JSON, no markdown, no commentary.',
+].join('\n');
+
+const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
+
 /**
- * Parse raw Phase ISA assembly emitted by the SLM into a structured decision.
- *
- * Runs a dedup pass: GRANTs are collected as a set (the SLM is prone to repeating
- * them) and duplicate ROUTE/ALLOC lines are last-wins. Set semantics keep the ISA
- * clean and the downstream allocation noise-free.
+ * Parse ISA assembly text into a structured decision. GRANT is a set; ROUTE
+ * and ALLOC are last-wins; `;` starts an inline comment. Throws when the text
+ * contains no recognized instruction.
  */
-export function parseAllocatorAssembly(raw) {
+export function parseISA(raw) {
   const d = { tools: [] };
   const granted = new Set();
   let recognized = 0;
@@ -34,41 +65,110 @@ export function parseAllocatorAssembly(raw) {
     const [op, ...args] = line.split(/\s+/);
     const kind = op?.toUpperCase();
     if (kind === 'ROUTE' && args[0]) { d.agent = args[0]; recognized++; continue; }
-    if (kind === 'GRANT' && args[0]) { if (!granted.has(args[0])) { granted.add(args[0]); d.tools.push(args[0]); } recognized++; continue; }
-    if (kind === 'ALLOC' && args.length >= 1) {
+    if (kind === 'GRANT' && args[0]) {
+      if (!granted.has(args[0])) { granted.add(args[0]); d.tools.push(args[0]); }
+      recognized++;
+      continue;
+    }
+    if (kind === 'ALLOC' && args[0]) {
       const n = Number(args[1]);
       if (!Number.isFinite(n)) continue;
       const key = RESOURCES.find(([tag]) => tag === args[0].toUpperCase())?.[1];
       if (key) { d[key] = n; recognized++; }
-      continue;
     }
   }
-  if (!recognized) throw new Error('allocator model returned no Phase assembly');
-  d.action = 'allocate';
-  d.asm = String(raw ?? '').trim();
+  if (!recognized) throw new Error('no ISA assembly found in model output');
   return d;
 }
 
-// Extract a content delta from an SSE `data:` line, or null if none/end-of-stream.
-// NOTE: keep reading `delta.content` only. Reasoning/thinking models (e.g.
-// deepseek-v4-flash) stream their *final answer* in `delta.content` *after* a long
-// `delta.reasoning` preamble; consuming `reasoning` here would corrupt structured
-// ISA parsing. The fix for empty content on such models is a larger max_tokens so
-// the model gets past the reasoning pass and actually emits content.
+/**
+ * If a model ignored the line format and answered in JSON, salvage the object.
+ * The caveman format is the contract; this is a lenient last read, never a
+ * preferred path.
+ */
+export function pickJson(raw) {
+  const s = String(raw ?? '').trim();
+  try { return JSON.parse(s); } catch { /* fall through to brace extraction */ }
+  const m = s.match(/\{[\s\S]*\}/);
+  if (!m) throw new Error('model output is neither ISA assembly nor JSON');
+  return JSON.parse(m[0]);
+}
+
+/** Render an allocation back to ISA text. Deterministic, deduped, one line
+ *  per decision. */
+export function toISA(allocation) {
+  const b = allocation.budget ?? {};
+  const lines = [`ROUTE ${allocation.agent}`];
+  for (const [tag, key] of RESOURCES) {
+    const n = Number(b[key]);
+    if (Number.isFinite(n)) lines.push(`ALLOC ${tag} ${Math.round(n)}`);
+  }
+  const granted = new Set();
+  for (const tool of allocation.tools ?? []) {
+    if (granted.has(tool)) continue; // a grant is a set
+    granted.add(tool);
+    lines.push(`GRANT ${tool}`);
+  }
+  return lines.join('\n');
+}
+
+/**
+ * Merge a model decision over the heuristic base, clamped to the caller's
+ * ceilings. Foreign agents and ungranted tools never survive; no emitted
+ * value may exceed its ceiling; a non-positive ceiling forces zero.
+ */
+export function clampISA(base, decision, { allowedTools = null, allowedAgents = null } = {}) {
+  const tools = new Set(allowedTools ?? base.tools ?? []);
+  const agents = new Set(allowedAgents ?? [base.agent]);
+  const agent = agents.has(String(decision.agent)) ? String(decision.agent) : base.agent;
+  const granted = (Array.isArray(decision.tools) ? decision.tools : []).map(String).filter((t) => tools.has(t));
+  const budget = {};
+  for (const [, key] of RESOURCES) {
+    const ceil = Number(base.budget?.[key]);
+    if (!Number.isFinite(ceil) || ceil < 1) {
+      budget[key] = Number.isFinite(ceil) ? Math.max(0, ceil) : 1;
+      continue;
+    }
+    const v = Number(decision[key]);
+    budget[key] = Math.round(clamp(Number.isFinite(v) ? v : ceil, 1, ceil));
+  }
+  return { ...base, agent, tools: granted.length ? granted : base.tools, budget, policy: 'model' };
+}
+
+/**
+ * Deterministic offline allocation from the caller's ceilings. Context is
+ * halved — smallest context likely to finish. No growth logic, no priors.
+ */
+export function heuristic(task) {
+  const ceiling = task.budget ?? {};
+  const budget = {};
+  for (const [, key] of RESOURCES) {
+    const c = Number(ceiling[key]);
+    budget[key] = Number.isFinite(c) ? Math.max(0, Math.round(c)) : DEFAULT_BUDGETS[key];
+  }
+  budget.context_tokens = Math.max(0, Math.round(budget.context_tokens / 2));
+  const agent = typeof task.agent === 'string' && task.agent !== 'auto' ? task.agent : 'auto';
+  return {
+    schema: 'isa-allocation-v1',
+    agent,
+    tools: Array.isArray(task.tools) ? task.tools.map(String) : [],
+    budget,
+    policy: 'heuristic',
+  };
+}
+
+// --- SSE helpers (OpenAI-compatible stream) ---
+// Keep reading `delta.content` only. Reasoning models stream a long
+// `delta.reasoning` preamble before the final answer arrives in
+// `delta.content`; consuming reasoning would corrupt ISA parsing.
 function sseDelta(line) {
   if (!line.startsWith('data:')) return null;
   const data = line.slice(5).trim();
   if (!data || data === '[DONE]') return null;
-  try {
-    return JSON.parse(data)?.choices?.[0]?.delta?.content ?? null;
-  } catch {
-    return null;
-  }
+  try { return JSON.parse(data)?.choices?.[0]?.delta?.content ?? null; } catch { return null; }
 }
 
-// Read an OpenAI-compatible SSE stream (stream:true) from res.body, emitting each
-// content token to onToken as it arrives, and returning the fully accumulated raw text.
-async function streamRawResponse(res, onToken) {
+async function streamRawResponse(res) {
   const decoder = new TextDecoder();
   let buffer = '';
   let full = '';
@@ -82,56 +182,54 @@ async function streamRawResponse(res, onToken) {
       const line = buffer.slice(0, nl);
       buffer = buffer.slice(nl + 1);
       const delta = sseDelta(line);
-      if (delta) { full += delta; if (onToken) onToken(delta); }
+      if (delta) full += delta;
     }
   }
-  // Flush any trailing complete event that arrived without a trailing newline.
   if (buffer.trim() && buffer.startsWith('data:')) {
     const delta = sseDelta(buffer);
-    if (delta) { full += delta; if (onToken) onToken(delta); }
+    if (delta) full += delta;
   }
   return full;
 }
 
-async function modelDecision({ config, state, seed }) {
-  const stream = !!config.stream;
-  const onToken = typeof config.onToken === 'function' ? config.onToken : null;
-  const maxRetries = Math.max(0, Math.round(Number(config.maxRetries ?? config.retries ?? 2)));
-  const baseDelay = Math.max(0, Number(config.retryDelayMs ?? 400));
-  const backoffFactor = Math.max(1, Number(config.retryBackoffFactor ?? 2));
-  const attempts = maxRetries + 1;
-  const provider = resolveProvider({ prefix: 'SLM', fallbackModel: 'qwen2.5:1.5b' });
-  const url = `${String(config.base_url ?? provider.base_url).replace(/\/$/, '')}/chat/completions`;
+async function modelDecision({ model, base_url, state, stream = true, maxRetries = 2, retryDelayMs = 400, retryBackoffFactor = 2, timeout_ms = 30000 }) {
+  const attempts = Math.max(0, Math.round(Number(maxRetries))) + 1;
+  const delay = Math.max(0, Number(retryDelayMs));
+  const backoff = Math.max(1, Number(retryBackoffFactor));
+  const timeout = Math.max(1, Number(timeout_ms));
+  const url = `${String(base_url).replace(/\/+$/, '')}/chat/completions`;
   let lastError = null;
 
   for (let attempt = 0; attempt < attempts; attempt++) {
-    if (attempt > 0) await new Promise((r) => setTimeout(r, Math.min(baseDelay * Math.pow(backoffFactor, attempt - 1), 10000)));
+    if (attempt > 0) await new Promise((r) => setTimeout(r, Math.min(delay * Math.pow(backoff, attempt - 1), 10000)));
     const ctl = new AbortController();
-    const timer = setTimeout(() => ctl.abort(), Number(config.timeout_ms ?? 30000));
+    const timer = setTimeout(() => ctl.abort(), timeout);
     try {
       const body = {
-        model: String(config.model ?? provider.model),
-        temperature: 0, max_tokens: 2048,
+        model: String(model),
+        temperature: 0,
+        max_tokens: 2048,
         messages: [
-          { role: 'system', content: seedSystemPrompt(seed) },
-          { role: 'user', content: JSON.stringify(state) }
-        ]
+          { role: 'system', content: SYSTEM_PROMPT },
+          { role: 'user', content: JSON.stringify(state) },
+        ],
       };
       if (stream) body.stream = true;
       const r = await fetch(url, {
         method: 'POST',
-        headers: { 'content-type': 'application/json', authorization: `Bearer ${process.env.PHASE_ALLOCATOR_API_KEY ?? 'no-key'}` },
-        body: JSON.stringify(body), signal: ctl.signal
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${process.env.ISA_API_KEY ?? 'no-key'}` },
+        body: JSON.stringify(body),
+        signal: ctl.signal,
       });
       const status = r.status;
       if (status >= 500 || status === 429) { // transient upstream: retryable
-        lastError = new Error(`allocator model ${status}: ${await r.text()}`);
+        lastError = new Error(`isa model ${status}: ${await r.text()}`);
         if (attempt === attempts - 1) throw lastError;
         continue;
       }
-      if (!r.ok) throw new Error(`allocator model ${status}: ${await r.text()}`); // 4xx: no retry
-      const raw = stream ? await streamRawResponse(r, onToken) : (await r.json())?.choices?.[0]?.message?.content ?? '';
-      try { return parseAllocatorAssembly(raw); } catch { return pickJson(raw); }
+      if (!r.ok) throw new Error(`isa model ${status}: ${await r.text()}`);
+      const raw = stream ? await streamRawResponse(r) : (await r.json())?.choices?.[0]?.message?.content ?? '';
+      try { return parseISA(raw); } catch { return pickJson(raw); }
     } catch (error) {
       if (error === lastError) throw error; // already rethrown when retries exhausted
       const transient =
@@ -145,90 +243,54 @@ async function modelDecision({ config, state, seed }) {
     }
   }
   // Unreachable in practice; keeps the exhaust path explicit for callers.
-  throw lastError ?? new Error('allocator model request exhausted retries');
+  throw lastError ?? new Error('isa model request exhausted retries');
 }
 
-export function allocationToAssembly(allocation) {
-  const b = allocation.budget ?? {};
-  const lines = [`ROUTE ${allocation.agent}`];
-  for (const [tag, key] of RESOURCES) {
-    if (Number.isFinite(Number(b[key]))) lines.push(`ALLOC ${tag} ${Math.round(Number(b[key]))}`);
-  }
-  const granted = new Set();
-  for (const tool of allocation.tools ?? []) {
-    if (granted.has(tool)) continue; // dedup: never emit a GRANT twice
-    granted.add(tool);
-    lines.push(`GRANT ${tool}`);
-  }
-  return lines.join('\n');
-}
-
-export class PhaseAllocator {
-  constructor({ seed = PHASE_ARCHITECTURE_SEED, policy = 'heuristic', model = null } = {}) {
-    this.seed = seed;
-    this.seedHash = seedHash(seed);
+export class ISAAllocator {
+  constructor({ policy = 'heuristic', model = null } = {}) {
     this.policy = policy;
     this.model = model ?? {};
   }
 
-  // Deterministic, offline allocation. The budget is clamped to a fraction of the
-  // fiber ceiling, grown only by measured validation failures / context misses.
-  heuristic({ workflow, fiber, runtime = {}, availableAgents = [] }) {
-    const b = fiber.budget;
-    const failures = Number(runtime.validation_failures ?? 0);
-    const misses = Number(runtime.context_misses ?? 0);
-    const growth = clamp(1 + failures * 0.25 + misses * 0.15, 1, 1.8);
-    const context = Math.round(Math.min(Number(b.context_tokens), Number(b.context_tokens) * this.seed.priors.initial_context_fraction * growth));
-    const agentSpec = fiber.agent;
-    const requested = typeof agentSpec === 'string' ? agentSpec : String(agentSpec?.id ?? agentSpec?.adapter ?? 'exec');
-    const agent = requested === 'auto' ? (availableAgents.find((x) => x.available)?.id ?? 'auto') : requested;
-    const allocation = {
-      schema: 'phase-allocation-v1',
-      fiber_id: fiber.id,
-      agent,
-      agent_spec: typeof agentSpec === 'object' ? agentSpec : null,
-      tools: [...fiber.tools],
-      budget: { ...b, context_tokens: context },
-      reserve: { fraction: this.seed.priors.reserve_fraction, repair_fraction: this.seed.priors.repair_reserve_fraction },
-      stop: { on_validation_pass: true, max_wall_ms: Number(b.wall_ms), max_tool_calls: Number(b.tool_calls) },
-      state_vector: encodeAllocationState({ workflow, fiber, runtime }),
-      seed_hash: this.seedHash,
-      policy: 'heuristic'
-    };
-    allocation.asm = allocationToAssembly(allocation);
-    return allocation;
-  }
-
-  async allocate(args) {
-    const base = this.heuristic(args);
-    if (this.policy !== 'model') return base;
-    const { fiber, availableAgents = [] } = args;
-    const allowedAgents = new Set([base.agent, ...availableAgents.filter((x) => x.available).map((x) => x.id)]);
+  /**
+   * Allocate a task. Task shape:
+   *   { objective, cwd, agent?, tools?, budget? }  — budget is the ceilings.
+   * Returns { schema, agent, tools, budget, policy, asm, model_decision? }.
+   */
+  async allocate(task) {
+    const base = heuristic(task);
+    if (this.policy !== 'model') {
+      base.asm = toISA(base);
+      return base;
+    }
+    const provider = resolveProvider();
+    const allowedTools = new Set(task.tools ?? []);
+    const allowedAgents = new Set([base.agent]);
     try {
       const decision = await modelDecision({
-        config: this.model, seed: this.seed,
-        state: { state_vector: base.state_vector, budget_ceiling: fiber.budget, allowed_agents: [...allowedAgents], allowed_tools: fiber.tools, seed_hash: this.seedHash }
+        model: this.model.model ?? provider.model,
+        base_url: this.model.base_url ?? provider.base_url,
+        stream: this.model.stream !== false,
+        maxRetries: this.model.maxRetries ?? this.model.retries ?? 2,
+        retryDelayMs: this.model.retryDelayMs,
+        retryBackoffFactor: this.model.retryBackoffFactor,
+        timeout_ms: this.model.timeout_ms,
+        state: {
+          objective: task.objective,
+          ceilings: base.budget,
+          allowed_agents: [...allowedAgents],
+          allowed_tools: [...allowedTools],
+        },
       });
-      const agent = allowedAgents.has(String(decision.agent)) ? String(decision.agent) : base.agent;
-      const allowedTools = new Set(fiber.tools);
-      const tools = (Array.isArray(decision.tools) ? decision.tools : base.tools).map(String).filter((t) => allowedTools.has(t));
-      const b = fiber.budget;
-      const budget = {
-        ...base.budget,
-        context_tokens: Math.round(clamp(Number(decision.context_tokens ?? base.budget.context_tokens), 1, Number(b.context_tokens))),
-        tokens: Math.round(clamp(Number(decision.tokens ?? base.budget.tokens), 1, Number(b.tokens))),
-        wall_ms: Math.round(clamp(Number(decision.wall_ms ?? base.budget.wall_ms), 1000, Number(b.wall_ms))),
-        tool_calls: Math.round(clamp(Number(decision.tool_calls ?? base.budget.tool_calls), 1, Number(b.tool_calls))),
-        money_microunits: Math.round(clamp(Number(decision.money_microunits ?? base.budget.money_microunits), 0, Number(b.money_microunits))),
-        human_attention_microunits: Math.round(clamp(Number(decision.human_attention_microunits ?? base.budget.human_attention_microunits), 0, Number(b.human_attention_microunits)))
-      };
-      const retries = Math.max(0, Math.round(Number(this.model.maxRetries ?? this.model.retries ?? 2)));
-      const out = { ...base, agent, tools: tools.length ? tools : base.tools, budget, policy: 'model', model_decision: { action: String(decision.action ?? 'allocate'), raw: decision, retries } };
-      out.asm = allocationToAssembly(out);
+      const out = clampISA(base, decision, { allowedTools, allowedAgents });
+      out.model_decision = { action: 'allocate', raw: decision };
+      out.asm = toISA(out);
       return out;
     } catch (error) {
       if (this.model.required) throw error;
-      return { ...base, policy: 'heuristic-fallback', model_error: String(error) };
+      const out = { ...base, policy: 'heuristic-fallback', model_error: String(error?.message ?? error) };
+      out.asm = toISA(out);
+      return out;
     }
   }
 }

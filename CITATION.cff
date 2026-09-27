@@ -1,9 +1,0 @@
-cff-version: 1.2.0
-message: "If Phase contributes to published research, cite this software release and the exact allocation seed hash used."
-title: "Phase (phase-pi)"
-abstract: "Pi-native coordination for the Pi agent. Turns human intent into a bounded Phase allocation plan that a language model coordinates, and drives concurrent agents through a control+data bus + atomic ticket system."
-license: MIT
-preferred-citation:
-  title: "Phase (phase-pi)"
-  type: software
-  repository-code: "https://github.com/FatCitten/phase-pi"
