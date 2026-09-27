@@ -39,6 +39,8 @@ Options:
   --exec <cmd>        run this command per ticket (else built-in demo job)
   --pipeline          treat positional objectives as a linear dependent chain
   --dag <file>        JSON graph [{objective, depends_on:[...]}]
+  --drain             no new tickets: drain existing open/in-progress tickets
+                      (the resume path — pick up a session left by a dead run)
   --tickets <file>    JSON file with string[] objectives
   --home <path>       phase home (default: ./.phase)
   --dry-run           create tickets only, don't run workers
@@ -48,7 +50,7 @@ Options:
 
 async function main() {
   const argv = process.argv.slice(2);
-  const opt = { repo: process.cwd(), count: Math.max(1, (cpus().length || 2) - 1), policy: 'heuristic', model: process.env.PHASE_SLM_MODEL ?? slmProvider().model, exec: null, pipeline: false, dagFile: null, ticketsFile: null, home: process.env.PHASE_HOME || './.phase', dryRun: false };
+  const opt = { repo: process.cwd(), count: Math.max(1, (cpus().length || 2) - 1), policy: 'heuristic', model: process.env.PHASE_SLM_MODEL ?? slmProvider().model, exec: null, pipeline: false, dagFile: null, ticketsFile: null, home: process.env.PHASE_HOME || './.phase', dryRun: false, drain: false };
   const objectives = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -63,6 +65,7 @@ async function main() {
     else if (a === '--tickets') opt.ticketsFile = argv[++i];
     else if (a === '--home') opt.home = argv[++i];
     else if (a === '--dry-run') opt.dryRun = true;
+    else if (a === '--drain') opt.drain = true;
     else if (a.startsWith('-')) { console.error(`unknown option: ${a}`); usage(); process.exit(64); }
     else objectives.push(a);
   }
@@ -89,8 +92,11 @@ async function main() {
     for (const o of objectives) make({ objective: o });
   }
 
-  if (!created.length) { console.error('no objectives given'); usage(); process.exit(64); }
-  console.log(`tickets: ${created.length} (${opt.pipeline ? 'linear pipeline' : opt.dagFile ? 'DAG' : 'independent'}); workers: ${opt.count}; policy: ${opt.policy}; repo: ${opt.repo}`);
+  if (opt.drain) {
+    const live = store.listTickets().filter((t) => t.status === 'open' || t.status === 'in_progress');
+    console.log(`drain: ${live.length} live ticket(s); workers: ${opt.count}; repo: ${opt.repo}`);
+  } else if (!created.length) { console.error('no objectives given'); usage(); process.exit(64); }
+  else console.log(`tickets: ${created.length} (${opt.pipeline ? 'linear pipeline' : opt.dagFile ? 'DAG' : 'independent'}); workers: ${opt.count}; policy: ${opt.policy}; repo: ${opt.repo}`);
 
   if (opt.dryRun) {
     for (const t of created) console.log(`  ${t.id}\tdepends=${(t.depends_on||[]).join(',')||'-'}\t${t.objective}`);
@@ -107,17 +113,30 @@ async function main() {
   let finished = 0;
   const done = () => finished++;
   const worker = async (poolIdIndex) => {
+    let waiting = false; // one pool.wait diagnostic per idle episode, not per retry
     for (;;) {
-      const r = await runWorker({ agent: `w${poolId}.${poolIdIndex}`, repo: opt.repo, policy: opt.policy, model: opt.model, command: opt.exec, store, env: process.env });
-      if (r.status === 'no-ticket') {
-        // Maybe nothing is claimable yet (blocked on deps) but work remains.
-        const remaining = store.listTickets().filter((t) => t.status === 'open' || t.status === 'in_progress' || !store.getTicket(t.id));
-        const anyOpen = store.listTickets().some((t) => t.status === 'open');
-        const anyRunning = store.listTickets().some((t) => t.status === 'in_progress');
-        if (!anyOpen && !anyRunning) break; // fully drained
-        await sleep(120); // deps will unblock; retry
-        continue;
+      // PASSIVE WAIT: while nothing is claimable but live work remains, do NOT
+      // respawn workers — each respawn emitted worker.up/worker.down on the
+      // control bus, so a pool waiting on a long-running foreign claim or an
+      // unsatisfied dependency flooded the bus (~20 events/s observed). Wait
+      // silently with exponential backoff instead; claim only when a ticket is
+      // actually claimable. Same drain semantics, zero idle bus traffic.
+      let backoff = 120;
+      for (;;) {
+        const open = store.listTickets().some((t) => t.status === 'open');
+        const running = store.listTickets().some((t) => t.status === 'in_progress');
+        if (!open && !running) return; // fully drained
+        if (open && store.claimable().length > 0) break; // work available
+        if (!waiting) {
+          waiting = true;
+          store.control('pool.wait', { pool: poolId, reason: open ? 'tickets claimed/blocked' : 'waiting on in_progress', open, running });
+        }
+        await sleep(backoff);
+        backoff = Math.min(backoff * 2, 5000);
       }
+      waiting = false;
+      const r = await runWorker({ agent: `w${poolId}.${poolIdIndex}`, repo: opt.repo, policy: opt.policy, model: opt.model, command: opt.exec, store, env: process.env });
+      if (r.status === 'no-ticket') continue; // lost a claim race — back to passive wait
       done(); // 'done' or 'failed'
       // After completing, keep pulling until the queue is empty.
       const anyOpen = store.listTickets().some((t) => t.status === 'open');

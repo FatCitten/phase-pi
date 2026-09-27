@@ -49,6 +49,31 @@ phase_allocate "add rate limiting"
 phase_orchestrate "ship offline auth"
 ```
 
+## Round review with Jev (zero-param geometry)
+
+`phase_orchestrate`'s round review is **exact geometry over the tickets
+themselves** — no model, no network, no API key:
+
+ticket states are phases on a circle (`passed→0`, `failed→π`); the round is their
+superposition; the readout against the "done" anchor yields `goal_satisfied` as
+the **exact passed-fraction**. All done → STOP; fixable failures → RETRY;
+unfixable failures → the generative model WRITES replacement work; 50/50 →
+honestly ambiguous.
+
+The opinionated parts are dials, not weights — edit `phase.taste.mjs`:
+
+```js
+export const TASTE = {
+  bands: { yes: 0.72, no: 0.28 },   // alignment → YES / NO / UNKNOWN
+  retry: { maxAttempts: 2 },        // geometric retry budget per ticket
+  followup: { maxPerRound: 3 },     // replacement work the LLM may write
+  stop: { requireAllDone: true },   // false = "ship with known-broken residue"
+};
+```
+
+Architecture comparison against hosted Jev's published numbers:
+`docs/jev-architecture-comparison.md` · bench: `node bench/jev-compare.mjs`.
+
 ## Why Pi-only
 
 Phase is the coordination servant. Pi is the agent. One pairing, one target.

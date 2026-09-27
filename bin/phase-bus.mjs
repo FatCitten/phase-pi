@@ -21,6 +21,25 @@ import { resolve } from 'node:path';
 
 function pad(s, n) { s = String(s ?? ''); return s.length > n ? s.slice(0, n - 1) + '…' : s.padEnd(n); }
 
+function printUsage() {
+  console.log(`phase-bus — read or follow the coordination buses and list ticket state.
+
+Usage:
+  phase-bus [--repo R] [--home H] [--bus control|data] [--follow] [--data]
+  phase-bus tickets [--repo R] [--home H]      list tickets with status
+  phase-bus ticket <id>                        show one ticket
+  phase-bus emit <type> [key=value ...]        append a signal to a bus
+  phase-bus watch [--follow] [--bus ...]       read/stream bus events
+
+Options:
+  --repo <path>   repo/git root to coordinate   (default: cwd)
+  --home <path>   phase home                    (default: $PHASE_HOME or ./.phase)
+  --bus <name>    control | data                (default: control)
+  --follow, -f    stream new events
+  --data          operate on the data bus
+  --help, -h      show this help`);
+}
+
 function mainline() {
   const argv = process.argv.slice(2);
   const opt = { repo: process.cwd(), follow: false, data: false, home: process.env.PHASE_HOME || './.phase', cmd: null, ticketId: null, emitType: null, emitFields: {}, bus: 'control' };
@@ -38,6 +57,7 @@ function mainline() {
     else if (!a.startsWith('-') && !opt.cmd) { opt.cmd = a; positionals.push(a); }
     else if (!a.startsWith('-') && opt.cmd === 'ticket' && !opt.ticketId) opt.ticketId = a;
     else if (!a.startsWith('-')) {}
+    else if (a === '--help' || a === '-h') { printUsage(); process.exit(0); }
     else { console.error(`unknown option: ${a}`); process.exit(64); }
   }
   if (opt.cmd === 'emit') { opt.emitType = opt.emitType ?? positionals[1]; }

@@ -2,6 +2,67 @@
 
 All notable changes, grouped by version. [SemVer](https://semver.org).
 
+## [2.2.0] — Jev as zero-param geometry · evidence verification · director taste
+
+The hierarchy is now **RULES → JEV → VERIFY → LLM**: judgment is exact geometry
+over the tickets themselves, completion is interrogated against real signals,
+and the generative model only writes work. The human is a director, not a
+manager — one small file of dials.
+
+### Added
+- **Jev — zero-param geometry** (`src/jev.mjs`): ticket states are phases on the
+  unit circle (`passed→0`, `failed→π`); the round is the superposition; the
+  cosine readout against the "done" anchor yields `goal_satisfied` as the
+  **exact passed-fraction** (ZkBundle thesis: known structure → no model, 100%
+  at step 0). Pure policy (`applyJevPolicy`) maps geometry to `YES/NO/UNKNOWN`
+  with precedence: retry fixable failures → replace unfixable work → STOP clean.
+  Review never calls a model; every decision lands as a `decision.jev` control
+  event with the geometric evidence.
+- **Verification** (`src/verify.mjs`): an exit code is not evidence. With
+  `verify.beforeStop: 'git-evidence'` (the default), a passing ticket without a
+  commit matching its objective flips to failed and the geometry re-derives
+  truth: retry within the geometric budget → unfixable → the LLM writes
+  replacement work. `TicketStore.unarchive()` restores archived done tickets for
+  interrogation; attempt budgets persist across archives; orchestration never
+  exits 0 with unproven work (exit 3 + FINAL count).
+- **Taste — the director's dials** (`phase.taste.mjs`, `bin/phase-taste.mjs`):
+  bands, retry budget, follow-up cap, verification dial, terminal rule. The
+  `phase-taste` CLI validates and writes atomically (bad values are rejected,
+  the file is never partially written); edits take effect on the NEXT review.
+  Surfaced as the `phase_taste` tool and the `/phase taste` verb; ships in the
+  package.
+- **Session surface** (`src/session.mjs`, `/phase` command): repo-based
+  `.phase/session.json` manifest surviving pi restarts, worker leases +
+  heartbeats + stale-lease GC, archive-on-done compaction, `/phase
+  [picker|chat|tickets|archive|taste]`, and the `phase_chat` PERMISSION gate —
+  the LLM proposes, the deterministic runtime disposes.
+- **Bench + docs**: `bench/jev-compare.mjs` + `results/jev-compare.json` — our
+  measured numbers vs hosted Jev's published ones (85.4% on 10k text questions,
+  ~80–210 ms/decision, $0.042/Mtok); architecture + integration-fit analysis in
+  `docs/jev-architecture-comparison.md`; design notes in `docs/sessions.md`.
+  The real-Jev arm activates with `TYPESAFE_API_KEY` when sign-ups reopen.
+
+### Changed
+- Provider: default brain is the light cloud model `glm-5.3-flash:cloud`;
+  heavy local chat models are never loaded by default.
+- Reconcile: `--all` audits archived done tickets too; the objective→evidence
+  keyword is now a shared regex join, matching commit subjects that are the
+  full objective even with interleaved stop-words.
+
+### Fixed — stale-decision sweep (worker-flap incident, ABYSS 2026-09-25)
+- Passive drain wait: a pool with nothing claimable no longer respawns workers
+  every ~120 ms; it waits with exponential backoff (120 ms → 5 s cap) and emits
+  one `pool.wait` per idle episode (~30 up/down pairs → 2/2 + 1 event).
+- Dependencies resolve against archived tickets (a compacted dependency no
+  longer blocks its dependent forever).
+- Stale-lease GC: `reapStale()` is now called on attach and before lease
+  registration, so dead workers cannot lease-park forever.
+- Dead `llmProvider` export removed; repo-local `.phase` demo residue cleared.
+
+### Tests
+48 green (jev 17 · verification 10 · taste 5 · session/chat-gate/parsePlan 16).
+Typecheck clean.
+
 ## [2.1.1] — install safety
 
 Fix: re-running the launcher could brick a live Pi session (it re-ran `pi install`

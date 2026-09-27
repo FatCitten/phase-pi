@@ -20,8 +20,10 @@ import { resolve } from 'node:path';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function scheduleIntent({ store, tickets, repo, policy, model, count }) {
-  // Create tickets from the plan (ordinal DEPENDS resolved by create order).
+/** Create tickets from a chat intent (ordinal DEPENDS resolved by create order).
+ *  Used by both the auto path (create + schedule) and the PERMISSION path
+ *  (create only — the human approves, then the caller drains). */
+function createIntentTickets({ store, tickets }) {
   const created = [];
   const slot = [];
   for (const t of tickets) {
@@ -36,10 +38,14 @@ async function scheduleIntent({ store, tickets, repo, policy, model, count }) {
     }
     if (deps.length) {
       const t = store.getTicket(created[i].id); t.depends_on = deps;
-      const { writeFileSync } = await import('node:fs'); const { join } = await import('node:path');
       writeFileSync(join(store.ticketDir, `${t.id}.ticket.json`), JSON.stringify(t, null, 2));
     }
   }
+  return created;
+}
+
+async function scheduleIntent({ store, tickets, repo, policy, model, count }) {
+  const created = createIntentTickets({ store, tickets });
   const anyOpen = () => store.listTickets().some((t) => t.status === 'open');
   const anyRun = () => store.listTickets().some((t) => t.status === 'in_progress');
   const workers = Array.from({ length: count }, (_, i) => (async () => {
@@ -109,13 +115,18 @@ async function repl({ repo, model, planning, baseUrl, home, count, gate }) {
   await new Promise((res) => rl.on('close', res));
 }
 
-async function headless({ goal, repo, model, planning, baseUrl, home, count, gate }) {
-  const session = new ChatSession({ repo, model, planning_model: planning, base_url: baseUrl, home });
+async function headless({ goal, repo, model, planning, baseUrl, home, count, gate, chat = null, resume = false }) {
+  const session = new ChatSession({ repo, model, planning_model: planning, base_url: baseUrl, home, id: chat, resume });
   const intent = await session.turn(goal, { permissionDefault: gate === 'permission' });
   if (intent.question) { console.log(`brain> ${intent.question}`); return; }
   if (intent.tickets && intent.tickets.length) {
-    if (intent.permission || gate === 'permission') { console.log(`[gate] pending ${intent.tickets.length} tickets (auto-approve with --gate auto)`); }
-    else {
+    if (intent.permission || gate === 'permission') {
+      // PERMISSION gate: create the tickets so the human can approve them
+      // deterministically (ids are stable), but do NOT schedule. The approver
+      // (pi extension / CLI) drains with `phase-schedule --drain`.
+      const created = createIntentTickets({ store: session.store, tickets: intent.tickets });
+      console.log(`[gate] pending ${created.length} ticket(s): ${created.map((c) => c.id).join(' ')}`);
+    } else {
       await scheduleIntent({ store: session.store, tickets: intent.tickets, repo, policy: 'heuristic', model, count });
       console.log(`[scheduler] scheduled ${intent.tickets.length} ticket(s)`);
     }
@@ -126,7 +137,7 @@ async function headless({ goal, repo, model, planning, baseUrl, home, count, gat
 
 async function main() {
   const argv = process.argv.slice(2);
-  const opt = { repo: process.cwd(), model: process.env.PHASE_LLM_MODEL ?? resolveProvider({ prefix: 'LLM' }).model, planning: process.env.PHASE_LLM_PLANNING ?? null, baseUrl: process.env.PHASE_LLM_BASE_URL ?? resolveProvider({ prefix: 'LLM' }).base_url, home: process.env.PHASE_HOME || './.phase', count: Math.max(1, (cpus().length || 2) - 1), gate: process.env.PHASE_GATE ?? 'auto', prompt: null };
+  const opt = { repo: process.cwd(), model: process.env.PHASE_LLM_MODEL ?? resolveProvider({ prefix: 'LLM' }).model, planning: process.env.PHASE_LLM_PLANNING ?? null, baseUrl: process.env.PHASE_LLM_BASE_URL ?? resolveProvider({ prefix: 'LLM' }).base_url, home: process.env.PHASE_HOME || './.phase', count: Math.max(1, (cpus().length || 2) - 1), gate: process.env.PHASE_GATE ?? 'auto', prompt: null, chat: null, resume: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--repo') opt.repo = resolve(argv[++i]);
@@ -138,10 +149,11 @@ async function main() {
     else if (a === '--permission') opt.gate = 'permission';
     else if (a === '--gate') opt.gate = argv[++i] === 'permission' ? 'permission' : 'auto';
     else if (a === '--prompt') opt.prompt = argv[++i];
+    else if (a === '--chat') { opt.resume = true; const v = argv[i + 1]; if (v && !v.startsWith('--')) { opt.chat = v; ++i; } }
     else if (a === '-h' || a === '--help') { usage(); process.exit(0); }
     else { console.error(`unknown option: ${a}`); usage(); process.exit(64); }
   }
-  if (opt.prompt) await headless({ goal: opt.prompt, repo: opt.repo, model: opt.model, planning: opt.planning, baseUrl: opt.baseUrl, home: opt.home, count: opt.count, gate: opt.gate });
+  if (opt.prompt) await headless({ goal: opt.prompt, repo: opt.repo, model: opt.model, planning: opt.planning, baseUrl: opt.baseUrl, home: opt.home, count: opt.count, gate: opt.gate, chat: opt.chat, resume: opt.resume });
   else await repl({ ...opt });
 }
 

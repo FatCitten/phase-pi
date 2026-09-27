@@ -32,6 +32,14 @@ export async function runWorker({ ticket_id, agent, repo, policy, model, command
   if (verbose) console.log(`[worker ${agent}] claimed ${ticket.id}: ${ticket.objective}`);
   store.start(ticket.id, agent);
 
+  // Worker lease: pid + ticket + heartbeat — the substrate for worker re-attach
+  // (resume-D) and deterministic stale-writer detection (docs/sessions.md §8).
+  store.session.lease(agent, { pid: process.pid, ticket_id: ticket.id });
+  const hb = setInterval(() => { try { store.session.heartbeat(agent); } catch { /* best-effort */ } }, 15_000);
+  if (hb.unref) hb.unref();
+  let released = false;
+  const releaseLease = () => { if (!released) { released = true; clearInterval(hb); try { store.session.release(agent); } catch { /* best-effort */ } } };
+
   // FRESH CONTEXT: per-ticket snapshot + allocation. Nothing shared between tickets.
   const fresh = store.snapshot();
   const wf = {
@@ -67,6 +75,8 @@ export async function runWorker({ ticket_id, agent, repo, policy, model, command
     outcome = await job;
   } catch (e) {
     outcome = { passed: false, result: String(e.message || e), artifact: null };
+  } finally {
+    releaseLease(); // the lease must die with the worker, success or not
   }
   const wallMs = Date.now() - startedAt;
 
@@ -75,6 +85,7 @@ export async function runWorker({ ticket_id, agent, repo, policy, model, command
     result: outcome.result, artifact: outcome.artifact, policy: allocation.policy
   };
   const done = store.finish({ id: ticket.id, agent, passed: r.passed, result: r.result, artifact: r.artifact, lock });
+  releaseLease();
   store.workerDown(agent);
   if (verbose) console.log(`[worker ${agent}] ${r.passed ? 'DONE' : 'FAIL'} ${ticket.id} in ${wallMs}ms`);
   return { status: r.passed ? 'done' : 'failed', ...r, ticket: done };
@@ -131,6 +142,22 @@ function runDemoJob({ ticket, repo, allocation, fresh, agent, store }) {
 
 if (process.argv[1] && process.argv[1].includes('worker')) {
   const a = process.argv.slice(2);
+  if (a.includes('--help') || a.includes('-h')) {
+    console.log(`phase-worker — run one ticket's work under an allocation.
+
+Usage:
+  phase-worker --ticket <id> [--exec "cmd"] [options]
+
+Options:
+  --ticket <id>    ticket to claim and run
+  --exec <cmd>     command run per ticket (env: PHASE_OBJECTIVE, PHASE_TICKET, PHASE_ALLOC_ISA)
+  --agent <name>   worker name                  (default: w<pid>)
+  --repo <path>    repo/git root to coordinate  (default: cwd)
+  --policy <p>     heuristic | model            (default: $PHASE_SLM_POLICY or heuristic)
+  --model <id>     SLM model id                 (default: $PHASE_SLM_MODEL)
+  --help, -h       show this help`);
+    process.exit(0);
+  }
   const opt = { ticket_id: null, agent: `w${process.pid}`, repo: process.cwd(), policy: process.env.PHASE_SLM_POLICY ?? 'heuristic', model: process.env.PHASE_SLM_MODEL ?? slmProvider().model, command: null };
   for (let i = 0; i < a.length; i++) {
     const x = a[i];

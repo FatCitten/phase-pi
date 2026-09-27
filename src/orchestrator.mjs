@@ -13,6 +13,9 @@ import { seedSystemPrompt, PHASE_ARCHITECTURE_SEED } from './phase-seeds.mjs';
 import { TicketStore } from './bus.mjs';
 import { sha256 } from './util.mjs';
 import { resolveProvider } from './provider.mjs';
+import { geometricJudgment as defaultJevJudgment, applyJevPolicy, loadTaste, JEV_POLICY } from './jev.mjs';
+import { verifyOutcomes } from './verify.mjs';
+import { TASTE_DEFAULTS } from './jev.mjs';
 
 // --- minimal OpenAI-compatible chat call, reuseable for any orchestrator prompt ---
 export async function slmComplete({ model, base_url, system, user, onToken = null, timeoutMs = 30000 }) {
@@ -122,10 +125,12 @@ export async function decomposeGoal({ goal, repo, model, base_url, fallback = tr
 }
 
 /**
- * Decide the next round after a schedule run: which failed tickets to retry,
- * which follow-ups to add, or STOP when the pool goal is done.
+ * Generative round review: ask the SLM to emit RETRY / ADD / STOP instructions.
+ * This is the existing deterministic-fallback-capable path Phase uses when Jev
+ * is unavailable, escalates, or when new natural-language ADD work is required
+ * (Jev only says WHETHER follow-up is needed, never WHAT to write).
  */
-export async function decideNext({ goal, outcomes, repo, model, base_url, fallback = true }) {
+export async function generativeReview({ goal, outcomes, repo, model, base_url, fallback = true }) {
   const done = outcomes.filter((o) => o.passed);
   const failed = outcomes.filter((o) => !o.passed);
   const system = seedSystemPrompt(PHASE_ARCHITECTURE_SEED);
@@ -144,6 +149,86 @@ export async function decideNext({ goal, outcomes, repo, model, base_url, fallba
     if (!fallback) throw e;
     return { retries: failed.slice(0, 1).map((o) => o.ticket_id).filter(Boolean), adds: [], stop: failed.length === 0, fallback: true, model_error: String(e.message || e) };
   }
+}
+
+/**
+ * Generative follow-up: Jev already decided follow-up work is needed; the
+ * generative model WRITES the actual objective text (Jev never invents it).
+ * Returns the `adds` array on success, or `[]` if generation failed (caller
+ * records that instead of faking success).
+ */
+export async function generateFollowupObjectives({ goal, outcomes, repo, model, base_url }) {
+  const system = seedSystemPrompt(PHASE_ARCHITECTURE_SEED);
+  const user = `GOAL: ${goal}\n\nOUTCOMES this round (repo ${repo}):\n${JSON.stringify(outcomes.map(({ ticket_id, objective, passed, result }) => ({ ticket_id, objective, passed, result })))}\n\n` +
+    'Additional work is required to complete the goal. Express that follow-up work ONLY as one or more lines: ADD "<objective>"\n' +
+    'Emit nothing else — no RETRY, no STOP, no prose.';
+  try {
+    const raw = await slmComplete({ model, base_url, system, user });
+    return parsePlan(raw).adds;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Decide the next round after a schedule run.
+ *
+ * Bounded judgment is exact geometry over the tickets themselves — zero
+ * parameters, no model, no network, always available. The generative model is
+ * used only to (a) write new follow-up text that Jev decided is needed, and
+ * (b) serve as the escalation path when the geometry is genuinely ambiguous.
+ * `jevJudgment` is injectable for tests; `onDecision` receives the decision.
+ */
+export async function decideNext({ goal, outcomes, repo, model, base_url, fallback = true, attempts = {}, taste = null, jevJudgment = defaultJevJudgment, onDecision = null }) {
+  // The director's taste — opinionated dials, one small file.
+  taste = taste ?? await loadTaste({ repo });
+  // Structured, observable decision metadata for the control bus — no hidden CoT.
+  const meta = { source: 'jev', attempted: true, kind: 'geometry' };
+
+  // Interrogate real signals BEFORE the geometry reads the bits: a passing
+  // exit code is not evidence. Default dial: git-evidence. Non-git repos are
+  // trusted automatically (surfaced as available:false), never a stall.
+  let evidenceOutcomes = outcomes;
+  const beforeStop = taste.verify?.beforeStop ?? TASTE_DEFAULTS.verify.beforeStop;
+  const verification = { dial: beforeStop, unverified: [], available: null, flipped: 0 };
+  if (beforeStop === 'git-evidence') {
+    const v = verifyOutcomes(outcomes, { repo });
+    evidenceOutcomes = v.outcomes;
+    verification.unverified = v.unverified;
+    verification.available = v.available;
+    verification.flipped = v.unverified.length;
+  }
+  meta.verification = verification;
+
+  const judgment = jevJudgment(evidenceOutcomes, { attempts, taste });
+  meta.judgment = judgment;
+  meta.policy = taste?.bands ?? JEV_POLICY;
+  // Policy validates against the EVIDENCE-derived reality, not the raw bits:
+  // an exit-0 lie is a failed ticket in every layer downstream of verification.
+  const decision = applyJevPolicy(judgment, { outcomes: evidenceOutcomes, policy: meta.policy, taste });
+  meta.decision = decision;
+  if (onDecision) onDecision(judgment, decision, meta);
+
+  // Jev made a confident bounded decision -> act without the generative model.
+  if (!decision.escalation) {
+    if (decision.stop) return { stop: true, retries: [], adds: [], jev: meta, fallback: false };
+    if (decision.followup) {
+      // Jev says new work is required; the generative model writes it.
+      let adds = [];
+      try { adds = await generateFollowupObjectives({ goal, outcomes, repo, model, base_url }); } catch { adds = []; }
+      const r = { retries: decision.retries, adds: adds.slice(0, taste?.followup?.maxPerRound ?? 3), stop: false, jev: meta, followup_via: 'generative', fallback: false };
+      if (!adds.length) r.followup_generation_failed = true; // surfaced, never fake success
+      return r;
+    }
+    return { retries: decision.retries, adds: [], stop: false, jev: meta, fallback: false };
+  }
+
+  // Geometry genuinely ambiguous -> existing generative review path (or its
+  // deterministic fallback). This is the ONLY time review needs the LLM.
+  meta.escalated = true;
+  const plan = await generativeReview({ goal, outcomes, repo, model, base_url, fallback });
+  plan.jev = meta;
+  return plan;
 }
 
 export { PHASE_ARCHITECTURE_SEED, sha256 };

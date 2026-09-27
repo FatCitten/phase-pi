@@ -15,10 +15,11 @@
  *
  * Pure Node stdlib. No training, no harness — just coordination.
  */
-import { mkdirSync, readFileSync, readdirSync, writeFileSync, existsSync, renameSync } from 'node:fs';
+import { mkdirSync, readFileSync, readdirSync, writeFileSync, existsSync, renameSync, unlinkSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { canonicalRepositoryPath, repositoryDomainId, gitSnapshot, nowIso } from './util.mjs';
+import { SessionStore } from './session.mjs';
 
 const sha = (x) => createHash('sha256').update(Buffer.isBuffer(x) ? x : String(x)).digest('hex');
 
@@ -33,9 +34,14 @@ export class TicketStore {
     this.busDir = join(this.root, 'bus');
     this.ticketDir = join(this.root, 'tickets');
     this.artifactDir = join(this.root, 'artifacts');
-    for (const d of [this.busDir, this.ticketDir, this.artifactDir]) mkdirSync(d, { recursive: true });
+    this.archiveDir = join(this.root, 'archive');
+    for (const d of [this.busDir, this.ticketDir, this.artifactDir, this.archiveDir]) mkdirSync(d, { recursive: true });
     this.controlPath = join(this.busDir, 'control.ndjson');
     this.dataPath = join(this.busDir, 'data.ndjson');
+    // The session manifest is the repo-based workspace: auto-created on the
+    // first ticket-store use, updated on lifecycle events. One session per repo.
+    this.session = new SessionStore({ home: this.root, repo: this.repo });
+    this.session.ensure();
   }
 
   _append(path, entry) {
@@ -90,6 +96,7 @@ export class TicketStore {
     writeFileSync(this._ticketFile(id), JSON.stringify(ticket, null, 2));
     this.control('ticket.created', { ticket_id: id, objective: ticket.objective, depends_on: ticket.depends_on });
     this.data('context.initial', { ticket_id: id, repo_snapshot: this.snapshot() });
+    try { this.session.touch({ goal: ticket.objective }); } catch { /* session is best-effort */ }
     return ticket;
   }
 
@@ -133,13 +140,38 @@ export class TicketStore {
     return null;
   }
 
-  /** True when every dependency of t has status 'done'. */
+  /** True when every dependency of t has status 'done'.
+   *  Dep tokens that are not ticket IDs fall back to objective substring
+   *  matching (e.g. depends_on: ["011"] matches a ticket whose objective
+   *  contains "011"), so hand-written DAGs can use human task numbers.
+   *  Matching also covers ARCHIVED tickets: a dependency that ran and was
+   *  compacted to .phase/archive before a dependent was created must still
+   *  count as done — otherwise the dependent is blocked forever (a drain
+   *  loop would spin on it). Both archive shapes are tolerated:
+   *  { schema: 'phase-archive-v1', ticket: {...} } and legacy bare tickets. */
   _depsDone(t) {
     for (const depId of t.depends_on ?? []) {
-      const dep = this.getTicket(depId);
+      let dep = this.getTicket(depId);
+      if (!dep) {
+        const needle = String(depId);
+        dep = this.listTickets().find((d) => d.id !== t.id && (d.objective ?? '').includes(needle));
+        if (!dep) dep = this._archivedDone(depId, needle);
+      }
       if (!dep || dep.status !== 'done') return false;
     }
     return true;
+  }
+
+  /** Find a DONE archived ticket by id or objective substring. Tolerates both
+   *  archive record shapes; ignores unreadable/foreign files. */
+  _archivedDone(idOrNeedle, objectiveNeedle = null) {
+    for (const rec of this.listArchive()) {
+      const t = rec?.ticket ?? rec; // phase-archive-v1 wrapper or legacy bare ticket
+      if (!t || typeof t !== 'object' || t.status !== 'done') continue;
+      if (idOrNeedle && t.id === idOrNeedle) return t;
+      if (objectiveNeedle && (t.objective ?? '').includes(objectiveNeedle)) return t;
+    }
+    return null;
   }
 
   /** Claimable-open tickets = open tickets whose deps are all done. */
@@ -154,7 +186,10 @@ export class TicketStore {
     return t;
   }
 
-  /** Record completion/failure on control + data buses and release the lock. */
+  /** Record completion/failure on control + data buses and release the lock.
+   *  Done (passed) tickets are compacted to the archive (§8 of docs/sessions.md):
+   *  the digest retains essential context (result, artifact, worker); the bulk
+   *  ticket file is removed so the live store and views stay small. */
   finish({ id, agent, passed, result = null, artifact = null, lock = null }) {
     const t = this.getTicket(id); if (!t) return null;
     t.status = passed ? 'done' : 'failed';
@@ -164,7 +199,87 @@ export class TicketStore {
     writeFileSync(this._ticketFile(id), JSON.stringify(t, null, 2));
     this.control(passed ? 'ticket.done' : 'ticket.failed', { ticket_id: id, worker: agent, passed, result, artifact });
     this.data('ticket.output', { ticket_id: id, worker: agent, passed, result, artifact });
+    try { this.session.touch({}); } catch { /* session is best-effort */ }
+    if (passed) this.archiveTicket(id, { worker: agent });
     return t;
+  }
+
+  /** Compact a done ticket into .phase/archive/<id>.json and remove it from
+   *  the live store. Never archives failed/open tickets. Fail-soft: an archive
+   *  error must not fail the worker's finish path. */
+  archiveTicket(id, { worker = null } = {}) {
+    const t = this.getTicket(id);
+    if (!t || t.status !== 'done') return null;
+    const record = {
+      schema: 'phase-archive-v1', archived_at: nowIso(),
+      ticket: t,
+      digest: {
+        objective: t.objective, result: t.result ?? null, artifact: t.artifact ?? null,
+        worker: worker ?? t.claimed_by ?? null, finished_at: t.finished_at ?? null,
+      },
+    };
+    try {
+      writeFileSync(join(this.archiveDir, `${id}.json`), JSON.stringify(record, null, 2));
+      this.control('ticket.archived', { ticket_id: id, worker, archive: join(this.archiveDir, `${id}.json`) });
+    } catch { /* archive is best-effort; the ticket file stays */ return record; }
+    try { unlinkSync(this._ticketFile(id)); } catch { /* already gone */ }
+    for (const l of [this._lockFile(id), `${this._lockFile(id)}.done`]) { try { unlinkSync(l); } catch { /* gone */ } }
+    return record;
+  }
+
+  /** Restore an archived done ticket to the live store (evidence interrogation:
+   *  a done ticket whose completion lacked evidence may be re-run). Fail-soft. */
+  unarchive(id) {
+    const p = join(this.archiveDir, `${id}.json`);
+    try {
+      const r = JSON.parse(readFileSync(p, 'utf8'));
+      const t = r.ticket ?? r;
+      writeFileSync(this._ticketFile(id), JSON.stringify(t, null, 2));
+      unlinkSync(p);
+      this.control('ticket.unarchived', { ticket_id: id });
+      return t;
+    } catch { return null; }
+  }
+
+  /** All archived (compacted done) ticket records, oldest first. */
+  listArchive() {
+    if (!existsSync(this.archiveDir)) return [];
+    return readdirSync(this.archiveDir).filter((f) => f.endsWith('.json')).map((f) => {
+      try { return JSON.parse(readFileSync(join(this.archiveDir, f), 'utf8')); } catch { return null; }
+    }).filter(Boolean);
+  }
+
+  /** Retry a failed ticket: back to open, claim cleared, re-claimable by the
+   *  next drain. Deterministic runtime op — the console/agent may REQUEST a
+   *  retry, but the transition happens here. Returns the ticket or null. */
+  retryTicket(id, { agent = 'human' } = {}) {
+    const t = this.getTicket(id);
+    if (!t || t.status !== 'failed') return null;
+    t.status = 'open'; t.claimed_by = null; delete t.finished_at;
+    t.retries = (t.retries ?? 0) + 1;
+    writeFileSync(this._ticketFile(id), JSON.stringify(t, null, 2));
+    // Defensive: clear any stale claim lock from the failed attempt, else the
+    // retried ticket would be un-claimable forever.
+    for (const f of [this._lockFile(id), `${this._lockFile(id)}.done`]) { try { unlinkSync(f); } catch { /* gone */ } }
+    this.control('ticket.retry', { ticket_id: id, agent, retries: t.retries });
+    try { this.session.touch({}); } catch { /* best-effort */ }
+    return t;
+  }
+
+  /** Steal an in_progress ticket whose lease is deterministically dead
+   *  (Layer-0 only: provable via the worker lease table). Never steals a
+   *  live or foreign-host lease — that is Jev/human territory. */
+  stealTicket(id, { agent = 'human', lease = null } = {}) {
+    const t = this.getTicket(id);
+    if (!t || t.status !== 'in_progress') return null;
+    const l = lease ?? (this.session.leases().find((x) => x.ticket_id === id) ?? null);
+    if (l && (l.alive === true || l.alive === null)) return { stolen: false, reason: 'lease alive or ambiguous' };
+    t.status = 'open'; t.claimed_by = null; delete t.claimed_at;
+    writeFileSync(this._ticketFile(id), JSON.stringify(t, null, 2));
+    for (const f of [this._lockFile(id), `${this._lockFile(id)}.done`]) { try { unlinkSync(f); } catch { /* gone */ } }
+    this.control('sig.steal', { ticket_id: id, agent, prior_worker: l?.agent ?? null, lease_dead: l ? l.alive === false : null });
+    try { this.session.touch({}); } catch { /* best-effort */ }
+    return { stolen: true, ticket: t };
   }
 
   /** Fresh-context snapshot for a worker: repo git state + a per-ticket nonce. */

@@ -1,6 +1,6 @@
 {
   "name": "phase-pi",
-  "version": "2.1.1",
+  "version": "2.2.0",
   "description": "phase — Pi-native. Turns human intent into a bounded plan and drives concurrent agents through a control+data bus + atomic ticket system. Bundled Pi tools + skill; runs only in the Pi agent.",
   "type": "module",
   "license": "MIT",
@@ -29,7 +29,9 @@
     "phase-orchestrate": "./bin/phase-orchestrate.mjs",
     "phase-chat": "./bin/phase-chat.mjs",
     "phase-chatroom": "./bin/phase-chatroom.mjs",
-    "phase-bus": "./bin/phase-bus.mjs"
+    "phase-bus": "./bin/phase-bus.mjs",
+    "phase-reconcile": "./bin/phase-reconcile.mjs",
+    "phase-taste": "./bin/phase-taste.mjs"
   },
   "scripts": {
     "orch": "node bin/phase-orchestrate.mjs",
@@ -53,7 +55,8 @@
     "extensions",
     "install.sh",
     "phase",
-    "README.md"
+    "README.md",
+    "phase.taste.mjs"
   ],
   "pi": {
     "extensions": [
@@ -63,5 +66,8 @@
       "./skills"
     ],
     "type": "package"
+  },
+  "dependencies": {
+    "@earendil-works/pi-tui": "^0.87.1"
   }
 }

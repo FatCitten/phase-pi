@@ -64,6 +64,7 @@ async function main() {
 
   const outcomes = []; // persistent across rounds
   const createdIds = [];
+  let lastUnverified = 0; // completions that lacked evidence at the last review
 
   for (let round = 1; round <= opt.rounds; round++) {
     say(`\n===== ROUND ${round}/${opt.rounds} =====`);
@@ -114,20 +115,48 @@ async function main() {
     const roundDone = outcomes.filter((o) => o.passed).length;
     const roundFailed = outcomes.filter((o) => !o.passed);
 
-    // 3. REVIEW via SLM
+    // 3. REVIEW: bounded decision — exact geometry over the tickets themselves
+    //    (zero parameters, no model). The generative SLM only writes follow-up
+    //    text, and is the escalation path when the geometry is ambiguous.
     say(`\n[review] round done: ${roundDone} done, ${roundFailed.length} failed`);
-    const decision = await decideNext({ goal: opt.goal, outcomes, repo: opt.repo, model: opt.model, base_url: opt.base_url, fallback: true });
+    const attempts = Object.fromEntries([
+      ...store.listTickets(),
+      ...(typeof store.listArchive === 'function' ? store.listArchive().map((r) => r.ticket ?? r).filter(Boolean) : []),
+    ].map((t) => [t.id, Number(t.attempts ?? 0)]));
+    const decision = await decideNext({ goal: opt.goal, outcomes, repo: opt.repo, model: opt.model, base_url: opt.base_url, fallback: true, attempts });
+    if (decision.jev) {
+      const g = decision.jev.judgment?.geometry;
+      store.control('decision.jev', {
+        source: 'jev', kind: 'geometry', model: decision.jev.judgment?.model,
+        geometry: g, decision: decision.jev.decision, policy: decision.jev.policy,
+        retries: decision.retries,
+        adds: (decision.adds || []).map((a) => (typeof a === 'string' ? a : a.objective)),
+        stop: !!decision.stop,
+      });
+    }
     if (decision.model_error) say(`  (SLM unavailable; fallback decision)`);
-    if (decision.retries.length) say(`  SLM -> RETRY: ${decision.retries.join(', ')}`);
-    if (decision.adds.length) say(`  SLM -> ADD: ${decision.adds.map((a) => a.objective).join(' | ')}`);
-    if (decision.stop) say(`  SLM -> STOP`);
+    if (decision.jev?.decision?.escalation) say(`  (geometry ambiguous; escalated to generative review: ${decision.jev.decision.reason})`);
+    if (decision.jev?.decision && !decision.jev?.decision?.escalation) say(`  Jev -> ${decision.jev.decision.action} (exact, zero-param)`);
+    if (decision.jev?.judgment?.geometry) {
+      const g = decision.jev.judgment.geometry;
+      say(`  geometry: alignment=${g.alignment} (done=${g.n - g.failed}, failed=${g.failed}, unfixable=${g.unfixable})`);
+    }
+    if (decision.followup_generation_failed) say(`  (follow-up needed but the generative model failed — surfaced, not faked)`);
+    if (decision.retries.length) say(`  -> RETRY: ${decision.retries.join(', ')}`);
+    lastUnverified = (decision.jev?.verification?.unverified ?? []).length;
+    if (decision.adds.length) say(`  -> ADD: ${decision.adds.map((a) => (typeof a === 'string' ? a : a.objective)).join(' | ')}`);
+    if (decision.stop) say(`  -> STOP`);
 
-    // Retry failed tickets by reopening them (clear lock + reset).
+    // Retry failed (or evidence-unverified) tickets by reopening them.
+    const unverified = new Set(decision.jev?.verification?.unverified ?? []);
+    if (unverified.size) say(`  verify: ${unverified.size} completion(s) lacked git evidence — requeued for interrogation`);
     if (decision.retries.length) {
       for (const id of decision.retries) {
-        const t = store.getTicket(id);
-        if (t && t.status === 'failed') {
+        let t = store.getTicket(id);
+        if (!t && unverified.has(id)) t = store.unarchive(id); // done+archived: restore for interrogation
+        if (t && (t.status === 'failed' || (t.status === 'done' && unverified.has(id)))) {
           t.status = 'open'; t.claimed_by = null; t.result = null; delete t.artifact;
+          t.attempts = Number(t.attempts ?? 0) + 1; // geometric retry budget input
           const { writeFileSync } = await import('node:fs');
           const { join } = await import('node:path');
           writeFileSync(join(store.ticketDir, `${id}.ticket.json`), JSON.stringify(t, null, 2));
@@ -146,8 +175,8 @@ async function main() {
   const finalDone = store.listTickets().filter((t) => t.status === 'done').length;
   const finalFailed = store.listTickets().filter((t) => t.status === 'failed').length;
   const finalOpen = store.listTickets().filter((t) => t.status === 'open').length;
-  console.log(`\n[orchestrate] FINAL: ${finalDone} done, ${finalFailed} failed, ${finalOpen} still open over ${createdIds.length} tickets`);
-  process.exitCode = finalFailed ? 2 : 0;
+  console.log(`\n[orchestrate] FINAL: ${finalDone} done, ${finalFailed} failed, ${finalOpen} still open over ${createdIds.length} tickets${lastUnverified ? ` (${lastUnverified} completion(s) UNVERIFIED — no git evidence)` : ''}`);
+  if (lastUnverified) process.exitCode = Math.max(process.exitCode || 0, 3); // never exit 0 with unproven work
 }
 
 function usage() {

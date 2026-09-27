@@ -21,7 +21,8 @@ const SYSTEM_PROMPT = [
   `Objective: ${PHASE_ARCHITECTURE_SEED.objective}.`,
   'Rules:',
   '- Never invent project facts. Treat everything the user says as intent/constraint, not truth about their code.',
-  '- If the request is ambiguous or needs a decision, reply with: QUESTION "<one clarifying question>" and nothing else.',
+  '- Prefer proposing work. When the request names concrete, doable work, emit TICKET lines — do not ask questions you could answer by doing the work in the named repo.',
+  '- Ask at most ONE clarifying QUESTION, and only when the request is truly blocking (missing decision you cannot default, e.g. a choice among incompatible outcomes). Never re-ask what a previous turn already answered — use the conversation history.',
   '- To plan real work, emit bounded Phase plan lines:',
   '  TICKET "<objective>"   (one per subtask)',
   '  DEPENDS <T-n|T-ID>     (optional per ticket)',
@@ -35,8 +36,10 @@ const SYSTEM_PROMPT = [
 
 function parseIntent(raw) {
   const intent = { question: null, tickets: [], constraints: [], permission: false, run: false, stop: false };
+  const opLines = [];
   for (const line of String(raw ?? '').split(/\r?\n/)) {
     const l = line.replace(/;.*/, '').trim();
+    opLines.push(l);
     if (!l) continue;
     const [op, ...rest] = l.split(/\s+/);
     const kind = op?.toUpperCase();
@@ -47,9 +50,13 @@ function parseIntent(raw) {
     if (kind === 'RUN') { intent.run = true; continue; }
     if (kind === 'STOP') { intent.stop = true; continue; }
   }
-  // Pull tickets via the shared parsePlan (supports TICKET "x" DEPENDS T-n).
-  const plan = parsePlan(raw);
+  // Pull tickets via the shared parsePlan, but ONLY from non-op lines — a
+  // QUESTION/PERMISSION/RUN line must never become a ticket objective
+  // (the lenient prose fallback would otherwise turn a question into work).
+  const plan = parsePlan(opLines.filter((l) => !/^(QUESTION|PERMISSION|RUN|CONSTRAINT|STOP)\b/i.test(l)).join('\n'));
   intent.tickets = plan.tickets;
+  // A clarifying question is the turn's entire output: no plan alongside it.
+  if (intent.question) intent.tickets = [];
   return intent;
 }
 
@@ -64,14 +71,32 @@ export class ChatSession {
    * @param {object} opts
    *   repo, model, planning_model, base_url, home, id
    */
-  constructor({ repo, model, planning_model = null, base_url = resolveProvider({ prefix: 'LLM' }).base_url, home = process.env.PHASE_HOME || './.phase', id = null }) {
+  constructor({ repo, model, planning_model = null, base_url = resolveProvider({ prefix: 'LLM' }).base_url, home = process.env.PHASE_HOME || './.phase', id = null, resume = false }) {
     this.repo = repo;
     this.model = model ?? resolveProvider({ prefix: 'LLM', fallbackModel: 'qwen2.5:1.5b' }).model;
     this.planning_model = planning_model; // larger / different model for decomposition
     this.base_url = base_url;
     this.store = new TicketStore({ home, repo });
-    this.id = id || `chat-${Date.now().toString(36)}`;
+    const manifest = this.store.session.load();
+    this.id = id || (resume && manifest?.chat_id) || `chat-${Date.now().toString(36)}`;
     this.history = []; // [{role:'user'|'assistant', content, ts}]
+    // Resume: replay this conversation's turns from the data bus so the brain
+    // keeps context across process spawns (the pi extension calls phase-chat
+    // headless per message — without replay every turn would be amnesiac).
+    if (resume) {
+      try {
+        for (const e of this.store.readData()) {
+          if ((e.type === 'chat.user' || e.type === 'chat.assistant') && e.session === this.id) {
+            this.history.push({ ts: e.ts, role: e.role, content: e.content });
+          }
+        }
+        this.history = this.history.slice(-20);
+      } catch { /* amnesia is better than a crash */ }
+    }
+    // Bind this chat to the repo session manifest (pi-agnostic session):
+    // the chat session id is recorded so a resumed pi chat can find the
+    // conversation's data-bus transcript again.
+    try { this.store.session?.touch({ chat_id: this.id }); } catch { /* best-effort */ }
   }
 
   _record(role, content, extra = {}) {
