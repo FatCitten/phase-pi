@@ -74,6 +74,30 @@ many pi chats and CLI workers attach to it over time.
 └── bus/            # control.ndjson + data.ndjson (the event log)
 ```
 
+## Roles & guardrails — scope, delegation, manager, HR
+
+Agents work **only inside their assigned scope**; crossing scopes is prevented
+by the deterministic runtime, not by politeness.
+
+- **Scopes**: a ticket carries `meta.scope` (unscoped = general pool, any worker).
+  A worker declares its grants (`--scope game,infra` or `$PHASE_SCOPES`).
+- **Worker guardrail**: `TicketStore.claim` refuses out-of-scope tickets. A
+  direct request records a `scope.violation` control event; pool scans filter
+  silently (violations are logged only when the agent insisted).
+- **Delegation is the only path across scopes**: `phase-role delegate T-XXXX
+  --scope SCOPE` closes the ticket and opens a scoped child with the same
+  objective — claimable only by workers granted that scope. No re-scoping in
+  place, no self-delegation.
+- **Manager** (`phase-role manager`): per-agent performance from the control
+  bus → recommended token budgets, deterministic and clamped
+  (`scale = 0.6 + 0.4*success; penalty = min(0.3, 0.1*violations)`,
+  floor 8k / base 24k / ceiling 48k). The manager recommends; the allocator
+  enforces ceilings. `--apply` emits `manager.review`.
+- **HR** (`phase-role hr`): behavior audit — scope violations, flakiness,
+  retry loops → flags (`scope-discipline`, `flaky`, `retry-loop`). **HR is
+  read-only by construction**: it observes and flags; the human decides.
+  `--apply` emits `hr.report`.
+
 ## Jev — bounded judgment as exact geometry
 
 `src/jev.mjs` never asks a model for opinions. Ticket states are phases on the

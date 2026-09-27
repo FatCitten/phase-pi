@@ -18,11 +18,12 @@ import { join } from 'node:path';
 
 function fail(msg, code = 64) { console.error(`phase worker: ${msg}`); process.exit(code); }
 
-export async function runWorker({ ticket_id, agent, repo, policy, model, command, store = null, env, verbose = true }) {
+export async function runWorker({ ticket_id, agent, repo, policy, model, command, store = null, env, verbose = true, scopes = null }) {
   store = store ?? new TicketStore({ repo });
   store.workerUp(agent);
 
-  const claim = store.claim({ ticket_id, agent });
+  // Scope guardrail: the worker can only claim inside its granted scopes.
+  const claim = store.claim({ ticket_id, agent, scopes });
   if (!claim) {
     if (verbose) console.error(`[worker ${agent}] no open ticket (${ticket_id ? 'already claimed/held: ' + ticket_id : 'all claimed'})`);
     store.workerDown(agent);
@@ -158,7 +159,7 @@ Options:
   --help, -h       show this help`);
     process.exit(0);
   }
-  const opt = { ticket_id: null, agent: `w${process.pid}`, repo: process.cwd(), policy: process.env.PHASE_SLM_POLICY ?? 'heuristic', model: process.env.PHASE_SLM_MODEL ?? slmProvider().model, command: null };
+  const opt = { ticket_id: null, agent: `w${process.pid}`, repo: process.cwd(), policy: process.env.PHASE_SLM_POLICY ?? 'heuristic', model: process.env.PHASE_SLM_MODEL ?? slmProvider().model, command: null, scopes: (process.env.PHASE_SCOPES ? process.env.PHASE_SCOPES.split(',').map((x) => x.trim()).filter(Boolean) : null) };
   for (let i = 0; i < a.length; i++) {
     const x = a[i];
     if (x === '--ticket') opt.ticket_id = a[++i];
@@ -167,6 +168,7 @@ Options:
     else if (x === '--policy') opt.policy = a[++i];
     else if (x === '--model') opt.model = a[++i];
     else if (x === '--exec') opt.command = a[++i];
+    else if (x === '--scope' || x === '--scopes') opt.scopes = String(a[++i]).split(',').map((y) => y.trim()).filter(Boolean);
     else fail(`unknown option: ${x}`);
   }
   runWorker(opt).then((r) => r.status === 'done' ? process.exit(0) : process.exit(r.status === 'failed' ? 2 : 0)).catch((e) => { console.error(e); process.exit(1); });

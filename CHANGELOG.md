@@ -2,6 +2,21 @@
 
 All notable changes, grouped by version. [SemVer](https://semver.org).
 
+## [Unreleased] — roles & guardrails
+
+Agents work only inside their assigned scope; the runtime enforces it.
+
+- Scope guardrail in `TicketStore.claim`: out-of-scope direct requests are
+  refused and recorded (`scope.violation`); pool scans filter silently.
+- Delegation is the only path across scopes: `phase-role delegate T-XXXX
+  --scope SCOPE` closes the ticket and opens a scoped child.
+- Manager role (`phase-role manager`): performance → clamped budget
+  recommendations (`manager.review` events); the allocator enforces ceilings.
+- HR role (`phase-role hr`): read-only behavior audit with flags
+  (`scope-discipline`, `flaky`, `retry-loop`); `hr.report` events.
+- Worker scope grants: `--scope A,B` / `$PHASE_SCOPES`.
+- Skill: "Roles & guardrails" section; `phase-role` registered as a bin.
+
 ## [2.2.0] — Jev as zero-param geometry · evidence verification · director taste
 
 The hierarchy is now **RULES → JEV → VERIFY → LLM**: judgment is exact geometry

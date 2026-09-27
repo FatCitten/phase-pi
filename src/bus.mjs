@@ -19,6 +19,7 @@ import { mkdirSync, readFileSync, readdirSync, writeFileSync, existsSync, rename
 import { join, resolve } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { canonicalRepositoryPath, repositoryDomainId, gitSnapshot, nowIso } from './util.mjs';
+import { scopeAllowed } from './roles.mjs';
 import { SessionStore } from './session.mjs';
 
 const sha = (x) => createHash('sha256').update(Buffer.isBuffer(x) ? x : String(x)).digest('hex');
@@ -126,19 +127,30 @@ export class TicketStore {
 
   /**
    * Atomically claim the next claimable open ticket for a worker.
-   * A ticket is claimable when it is open AND all its dependencies are done.
+   * A ticket is claimable when it is open AND all its dependencies are done AND
+   * (when the worker declared scopes) the ticket's scope is granted.
    * Uses an O_EXCL lock file so only one process wins; returns the ticket if
    * the caller owns the lock, else null (someone else claimed it / not ready).
+   *
+   * Scope guardrail: a direct request for an out-of-scope ticket is REFUSED and
+   * recorded as a `scope.violation`; pool scans silently filter (a violation is
+   * only logged when the agent insisted). The only path across scopes is
+   * manager delegation.
    *
    * Deps make this dependency-aware: a ticket whose upstream tickets aren't done
    * is never claimed, so a linear pipeline will NOT run out of order even when
    * many workers are hammering the queue.
    */
-  claim({ ticket_id = null, agent }) {
+  claim({ ticket_id = null, agent, scopes = null }) {
     const open = ticket_id
       ? (this.getTicket(ticket_id)?.status === 'open' ? [this.getTicket(ticket_id)] : [])
       : this.listTickets().filter((t) => t.status === 'open' && t.objective).sort((a, b) => a.created_at.localeCompare(b.created_at));
     for (const t of open) {
+      if (!t) continue;
+      if (!scopeAllowed(t, scopes)) {
+        if (ticket_id) this.control('scope.violation', { ticket_id: t.id, worker: agent, required_scope: t.meta?.scope ?? null });
+        continue;
+      }
       if (!this._depsDone(t)) continue; // not claimable yet
       const lock = this._lockFile(t.id);
       try {
@@ -151,6 +163,29 @@ export class TicketStore {
       return { ticket: t, lock };
     }
     return null;
+  }
+
+  /**
+   * DELEGATION — the only sanctioned path for work to cross scopes.
+   * The manager closes the out-of-scope ticket and opens a scoped child with
+   * the same objective; the child is claimed by workers granted that scope.
+   * Deterministic: statuses and events only, no judgment.
+   */
+  delegate(id, { toScope, by = 'manager' } = {}) {
+    const t = this.getTicket(id);
+    if (!t) return { error: `no ticket ${id}` };
+    if (t.status !== 'open') return { error: `ticket ${id} is ${t.status}; only open tickets can be delegated` };
+    const child = this.createTicket({
+      objective: t.objective,
+      depends_on: [],
+      meta: { ...t.meta, scope: toScope, delegatedFrom: id },
+    });
+    t.status = 'delegated';
+    t.finished_at = nowIso();
+    t.result = `delegated to scope "${toScope}" via ${child.id}`;
+    writeFileSync(this._ticketFile(id), JSON.stringify(t, null, 2));
+    this.control('ticket.delegated', { ticket_id: id, child: child.id, to_scope: toScope, by });
+    return { child, parent: t };
   }
 
   /** True when every dependency of t has status 'done'.

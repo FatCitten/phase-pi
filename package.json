@@ -31,7 +31,8 @@
     "phase-chatroom": "./bin/phase-chatroom.mjs",
     "phase-bus": "./bin/phase-bus.mjs",
     "phase-reconcile": "./bin/phase-reconcile.mjs",
-    "phase-taste": "./bin/phase-taste.mjs"
+    "phase-taste": "./bin/phase-taste.mjs",
+    "phase-role": "./bin/phase-role.mjs"
   },
   "scripts": {
     "orch": "node bin/phase-orchestrate.mjs",
