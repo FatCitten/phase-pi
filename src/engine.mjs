@@ -31,6 +31,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync, appendFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { BusStore } from './bus.mjs';
+import { snapshot, render } from '../bin/isa-state.mjs';
 
 const BWRAP_CANDIDATES = ['/usr/bin/bwrap', '/usr/local/bin/bwrap', '/bin/bwrap'];
 
@@ -98,6 +99,13 @@ export class Engine {
     this.writePointer(pointer);
     this.writeActuals(id, { status: 'running', started_at: pointer.started_at, wall_ms: 0, exec_count: 0, tool_calls: null, tokens: null });
     this.bus.emit('control', 'run.begin', { run: id, task: pointer.task });
+
+    // Emit the repo snapshot at run start — the comprehension record
+    try {
+      const s = snapshot(this.repo);
+      this.bus.emit('data', 'run.snapshot', { run: id, snapshot: render(s, true) });
+    } catch { /* snapshot best-effort; never fails the run */ }
+
     return { id, sandbox: this.sandboxPath(id), pointer };
   }
 
