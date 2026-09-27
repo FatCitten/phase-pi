@@ -41,9 +41,12 @@ cd phase-pi
 | the hook | `.opencode/plugins/isa/` | native tools + metering + confinement + deny-mode |
 | the bus | `src/bus.mjs` | the log — `control.ndjson` / `data.ndjson` |
 
-The harness hook autoloads from `.opencode/plugins/`. For sessions outside
-this repo, link or copy it into your own `~/.opencode/plugins/` (ISA-PRO is
-built for the session LLM to use on itself — that is the point).
+The harness hook autoloads from `.opencode/plugins/`. Its one dependency
+(`@opencode/plugin`) is a devDependency — `npm install` in this repo
+provisions it. For sessions outside this repo, link or copy the plugin dir
+into your own `~/.opencode/plugins/` and keep the dependency installed where
+the hook resolves it (ISA-PRO is built for the session LLM to use on itself —
+that is the point).
 
 ## What this is not
 

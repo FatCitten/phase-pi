@@ -28,7 +28,13 @@
   },
   "scripts": {
     "test": "node --test test/",
+    "typecheck": "tsc --noEmit",
     "smoke": "bash examples/smoke-test.sh"
+  },
+  "devDependencies": {
+    "@opencode/plugin": "2.0.18",
+    "@types/node": "^22",
+    "typescript": "^5"
   },
   "files": [
     "bin",
