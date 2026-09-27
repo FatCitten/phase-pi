@@ -214,6 +214,27 @@ export default Plugin.define({
       });
 
       editor.add({
+        name: "isa_state",
+        description:
+          "Repo comprehension snapshot: identity, structure counts, the last change-set per file, and uncommitted work — as a compact token block. The cheapest way to read environment state.",
+        input: {
+          type: "object",
+          properties: {
+            repo: { type: "string", description: `Repo to snapshot. Default: ${location}` },
+            base: { type: "string", description: "Compare <base>..HEAD. Default: HEAD~1." },
+          },
+          additionalProperties: false,
+        },
+        options: { namespace: "isa" },
+        execute: async (input: any) => {
+          const repo = input.repo ?? location;
+          const args = ["--repo", resolve(repo)];
+          if (input.base) args.push("--base", input.base);
+          return { content: await cli("state", args, 60_000) };
+        },
+      });
+
+      editor.add({
         name: "isa_emit",
         description: "Append a signal to the ISA bus (control or data). The bus is the log of record.",
         input: {

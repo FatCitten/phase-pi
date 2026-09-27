@@ -11,6 +11,7 @@ record.
 isa begin "add rate limiting"      # a sandbox plus a record — nothing planned
 isa exec  "node --test test/"
 isa status                          # the run facts
+isa state                           # the comprehension snapshot
 isa end   --passed
 isa bus                             # the record
 ```
@@ -41,6 +42,7 @@ cd phase-pi
 |---|---|---|
 | the engine | `src/engine.mjs`, `bin/` | runs, sandbox, wall safety limit, measurement |
 | the hook | `.opencode/plugins/isa/` | native tools + confinement + record-only metering |
+| the snapshot | `bin/isa-state.mjs` | repo state + diff as minimal tokens |
 | the bus | `src/bus.mjs` | the log — `control.ndjson` / `data.ndjson` |
 
 The harness hook autoloads from `.opencode/plugins/`. Its one dependency

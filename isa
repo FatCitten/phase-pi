@@ -6,6 +6,7 @@
  *   isa exec <cmd...>            run inside the sandbox (wall-limited)
  *   isa end [--passed]           close the run (measured)
  *   isa status                   the run facts
+ *   isa state                    the comprehension snapshot
  *   isa bus [emit|watch] ...     the log
  *   isa --help
  *
@@ -15,6 +16,7 @@ import { main as beginMain, usage as beginUsage } from './bin/isa-begin.mjs';
 import { main as execMain, usage as execUsage } from './bin/isa-exec.mjs';
 import { main as endMain, usage as endUsage } from './bin/isa-end.mjs';
 import { main as statusMain, usage as statusUsage } from './bin/isa-status.mjs';
+import { main as stateMain, usage as stateUsage } from './bin/isa-state.mjs';
 import { main as busMain, usage as busUsage } from './bin/isa-bus.mjs';
 
 const [cmd, ...rest] = process.argv.slice(2);
@@ -25,7 +27,7 @@ if (!cmd || cmd === '--help' || cmd === '-h' || cmd === 'help') {
     'A run is confined, recorded work. The sandbox is the boundary; the\n' +
     'bus is the log of record. Nothing is planned, nothing is budgeted,\n' +
     'nothing is enforced beyond the sandbox and the wall limit.\n\n' +
-    `${beginUsage()}\n\n${execUsage()}\n\n${endUsage()}\n\n${statusUsage()}\n\n${busUsage()}`,
+    `${beginUsage()}\n\n${execUsage()}\n\n${endUsage()}\n\n${statusUsage()}\n\n${stateUsage()}\n\n${busUsage()}`,
   );
   process.exit(0);
 }
@@ -35,12 +37,13 @@ const table = {
   exec: execMain,
   end: endMain,
   status: statusMain,
+  state: stateMain,
   bus: busMain,
 };
 
 if (table[cmd]) {
   table[cmd](rest).catch((e) => { console.error(e); process.exit(1); });
 } else {
-  console.error(`isa: unknown command ${cmd} (use: isa begin | exec | end | status | bus)`);
+  console.error(`isa: unknown command ${cmd} (use: isa begin | exec | end | status | state | bus)`);
   process.exit(64);
 }

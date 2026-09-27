@@ -1,6 +1,6 @@
 {
   "name": "isa-pro",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "ISA-PRO — a run is confined, recorded work. The sandbox is the boundary; the bus is the log of record. Nothing is planned, nothing is budgeted, nothing is enforced beyond the sandbox and the wall limit.",
   "type": "module",
   "license": "MIT",

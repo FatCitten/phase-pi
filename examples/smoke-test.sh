@@ -32,6 +32,11 @@ echo "=== 6. pointer cleared ==="
 STATUS="$("$ROOT/isa" status --repo "$ROOT" --home "$HOME_TMP" 2>&1)"
 echo "$STATUS" | grep -q "no active run" && ok "pointer cleared" || no "pointer cleared"
 
+echo "=== 7. comprehension snapshot ==="
+STATE="$("$ROOT/isa" state --repo "$ROOT" 2>&1)"
+echo "$STATE" | grep -q "^repo isa-pro v" && ok "state: repo line" || no "state repo line"
+echo "$STATE" | grep -q "^base " && ok "state: base diff" || no "state base diff"
+
 rm -rf "$HOME_TMP"
 
 echo

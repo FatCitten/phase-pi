@@ -23,13 +23,15 @@ One idea: **a run is confined, recorded work.**
 | `isa_begin` | start a run: task -> sandbox, the record begins |
 | `isa_exec` | run a command inside the sandbox (wall-time bounded by a hard safety limit) |
 | `isa_status` | the run facts: what is running, for how long, what it has done |
+| `isa_state` | repo comprehension snapshot: identity, structure, last change-set, uncommitted work — the cheapest read of the environment |
 | `isa_end` | close the run — engine-measured wall and actuals recorded |
 | `isa_emit` | append a signal to the bus |
 
-CLI: `isa begin|exec|end|status|bus`.
+CLI: `isa begin|exec|end|status|state|bus`.
 
 ## How to run work
 
+0. `isa_state` — read the environment cheaply before you begin.
 1. `isa_begin` with the task. Nothing else is asked of you up front.
 2. Do the work. `write`/`edit` go to the sandbox; `isa_exec` runs commands
    inside it. Writes outside the sandbox and the ledger (`.isa/`) are denied
@@ -41,6 +43,8 @@ CLI: `isa begin|exec|end|status|bus`.
 
 - **The sandbox is the boundary.** A run writes only inside its sandbox.
 - **The bus is the record.** If it happened, it is on the bus.
+- **Comprehension is cheap.** When you need repo state, `isa_state` first —
+  it is the smallest vocabulary that reconstructs state + diff.
 - **Measured, never self-reported.** The engine reads the clock; you do not
   claim numbers.
 - **No judgment in the runtime.** Facts in, facts out. Nothing is budgeted,
