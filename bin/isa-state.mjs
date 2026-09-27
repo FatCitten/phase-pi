@@ -76,6 +76,15 @@ const EXP = /^\s*export\b/;
 const TYP = /^\s*(interface|type)\b/;
 const COM = /^\s*(\/\/|\/\*|\*|#|<!--)/;
 
+/** Symbol name patterns — captures the identifier after the keyword. */
+const SYM_FN = /^\s*(export\s+)?(default\s+)?(async\s+)?function\s+([A-Za-z_$][A-Za-z0-9_$]*)/;
+const SYM_CLS = /^\s*class\s+([A-Za-z_$][A-Za-z0-9_$]*)/;
+const SYM_METH = /^\s*(async\s+)?([A-Za-z_$][A-Za-z0-9_$]*)\s*\(/; // method in class
+const SYM_CONST = /^\s*const\s+([A-Za-z_$][A-Za-z0-9_$]*)/;
+const SYM_LET = /^\s*let\s+([A-Za-z_$][A-Za-z0-9_$]*)/;
+const SYM_VAR = /^\s*var\s+([A-Za-z_$][A-Za-z0-9_$]*)/;
+const SYM_IMP = /^\s*import\s+(?:\{([^}]+)\}|\*?\s*as\s+([A-Za-z_$][A-Za-z0-9_$]*))/;
+
 /** Highest-level construct a changed line declares. */
 function constructToken(body) {
   if (FN.test(body)) return 'fn';
@@ -85,6 +94,41 @@ function constructToken(body) {
   if (TYP.test(body)) return 'type';
   if (COM.test(body)) return 'doc';
   return null;
+}
+
+/** Extract symbol names from a changed line. Returns array of {kind, name}. */
+function extractSymbols(line) {
+  const body = line.slice(1);
+  const syms = [];
+  let m;
+
+  m = SYM_FN.exec(body);
+  if (m) return [{ kind: 'fn', name: m[4] }];
+
+  m = SYM_CLS.exec(body);
+  if (m) return [{ kind: 'cls', name: m[1] }];
+
+  m = SYM_CONST.exec(body);
+  if (m) return [{ kind: 'const', name: m[1] }];
+
+  m = SYM_LET.exec(body);
+  if (m) return [{ kind: 'let', name: m[1] }];
+
+  m = SYM_VAR.exec(body);
+  if (m) return [{ kind: 'var', name: m[1] }];
+
+  m = SYM_IMP.exec(body);
+  if (m) {
+    if (m[1]) return m[1].split(',').map(s => s.trim()).filter(Boolean).map(name => ({ kind: 'imp', name }));
+    if (m[2]) return [{ kind: 'imp', name: m[2] }];
+  }
+
+  // For methods inside class bodies - only if we're likely in a class context
+  // (has preceding 'class' line in the diff). Skip for now - method detection
+  // requires multi-line context. The fn/cls/const/let/var/imp tokens are enough
+  // for tier-2.
+
+  return [];
 }
 
 /** Working tree statuses: XY -> status char, renames resolved. */
@@ -112,19 +156,26 @@ function baseOf(repo, base) {
   return (git(repo, ['rev-list', '--max-parents=0', 'HEAD']) ?? '').trim() || null;
 }
 
-/** Per-file diff: numstat counts + construct tokens, deterministic order. */
+/** Per-file diff: numstat counts + construct tokens + symbol names. */
 function fileDiff(repo, base, head, path) {
   const num = (git(repo, ['diff', '--numstat', `${base}..${head}`, '--', path]) ?? '').trim();
   let added = 0, removed = 0;
   if (num) { const [a, b] = num.split('\t'); added = Number(a) || 0; removed = Number(b) || 0; }
   const tokens = [];
-  const seen = new Set();
+  const symbols = [];
+  const seenTok = new Set();
+  const seenSym = new Set();
   const text = git(repo, ['diff', '-U0', `${base}..${head}`, '--', path]) ?? '';
   for (const line of text.split('\n')) {
     const sign = line[0];
     if (sign !== '+' && sign !== '-') continue;
     const tok = constructToken(line.slice(1));
-    if (tok) { const t = `${sign}${tok}`; if (!seen.has(t)) { seen.add(t); tokens.push(t); } }
+    if (tok) { const t = `${sign}${tok}`; if (!seenTok.has(t)) { seenTok.add(t); tokens.push(t); } }
+    // Tier-2: extract symbol names
+    for (const s of extractSymbols(line)) {
+      const key = `${sign}${s.kind}:${s.name}`;
+      if (!seenSym.has(key)) { seenSym.add(key); symbols.push({ sign, kind: s.kind, name: s.name }); }
+    }
   }
   if (removed === 0 && added > 0) tokens.push('add');
   if (added === 0 && removed > 0) tokens.push('del');
@@ -132,7 +183,7 @@ function fileDiff(repo, base, head, path) {
   if (cat === 'cfg') tokens.push('cfg');
   if (cat === 'bin') tokens.push('script');
   if (cat === 'doc') tokens.push('doc');
-  return { path, added, removed, tokens };
+  return { path, added, removed, tokens, symbols };
 }
 
 function diffSummary(repo, base) {
@@ -181,7 +232,8 @@ export function render(s, compact = false) {
   if (s.base) {
     lines.push(`base ${s.base.base}..${s.base.head} +${s.base.added} -${s.base.removed}`);
     for (const f of s.base.files) {
-      lines.push(`f:${f.path} +${f.added} -${f.removed}${f.tokens.length ? ' ' + f.tokens.join(' ') : ''}`);
+      const symPart = f.symbols && f.symbols.length ? ' ' + f.symbols.map(s => `${s.sign}${s.kind}:${s.name}`).join(' ') : '';
+      lines.push(`f:${f.path} +${f.added} -${f.removed}${f.tokens.length ? ' ' + f.tokens.join(' ') : ''}${symPart}`);
     }
   }
   for (const w of s.work) lines.push(`w:${w.path} ${w.status}`);

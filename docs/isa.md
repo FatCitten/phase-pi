@@ -61,13 +61,21 @@ f:README.md +12 -4 +doc doc
 w:src/engine.mjs M
 ```
 
+With `--base HEAD~3` (or any range), tier-2 adds symbol names:
+
+```
+f:src/engine.mjs +48 -68 -imp +imp +exp -imp:allocateFromAsm -imp:DEFAULT_BUDGETS
+  +imp:snapshot +imp:render -const:budget -const:alloc +const:s
+```
+
 | token | meaning |
 |---|---|
 | `repo <name> v<ver> files <n> [cat <n> ...] sha <s> dirty <n>` | identity, structure counts (`src bin doc test plug cfg other`, zero categories omitted), HEAD, uncommitted count |
 | `base <ref>..HEAD +<a> -<r>` | the compared change-set and its line totals |
-| `f:<path> +<a> -<d> [tokens]` | per-file diff: line counts + construct tokens |
+| `f:<path> +<a> -<d> [tokens] [symbols]` | per-file diff: line counts + construct tokens + **tier-2 symbol names** |
 | `w:<path> <XY>` | working tree status (`M` modified, `A` added, `D` deleted, `R` renamed, `?` untracked) |
 | construct tokens | `add del +fn -fn +cls -cls +imp -imp +exp -exp +type -type +doc -doc cfg script doc` |
+| tier-2 symbol tokens | `+fn:name -fn:name +cls:name -cls:name +const:name -const:name +let:name -let:name +var:name -var:name +imp:name -imp:name` |
 
 Options: `--base <ref>` picks the compared range (default `HEAD~1`),
 `--compact` joins everything into one line, `--json` emits the structured

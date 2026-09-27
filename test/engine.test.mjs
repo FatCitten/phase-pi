@@ -4,6 +4,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Engine } from '../src/engine.mjs';
+import { execFileSync } from 'node:child_process';
 
 function tempHome() {
   return mkdtempSync(join(tmpdir(), 'isa-engine-'));
@@ -13,8 +14,12 @@ function makeEngine(home) {
   return new Engine({ home, repo: home });
 }
 
-test('begin: creates pointer + sandbox, logs sig.run.begin, nothing planned', () => {
+test('begin: creates pointer + sandbox, logs sig.run.begin + sig.run.snapshot', () => {
   const home = tempHome();
+  // init git so snapshot works
+  execFileSync('git', ['init', '-q'], { cwd: home, stdio: 'ignore' });
+  execFileSync('git', ['config', 'user.email', 't@t.t'], { cwd: home, stdio: 'ignore' });
+  execFileSync('git', ['config', 'user.name', 't'], { cwd: home, stdio: 'ignore' });
   const engine = makeEngine(home);
   const { id, sandbox, pointer } = engine.begin({ task: 'add rate limiting' });
   assert.match(id, /^R-/);
@@ -24,7 +29,9 @@ test('begin: creates pointer + sandbox, logs sig.run.begin, nothing planned', ()
   const data = engine.bus.readData();
   assert.equal(control[0].type, 'sig.run.begin');
   assert.equal(control[0].task, 'add rate limiting');
-  assert.deepEqual(data, []);
+  assert.equal(data.length, 1);
+  assert.equal(data[0].type, 'sig.run.snapshot');
+  assert.ok(data[0].snapshot.startsWith('repo '));
   rmSync(home, { recursive: true, force: true });
 });
 

@@ -90,6 +90,46 @@ test('render: compact block reconstructs repo + diff in one line', () => {
   rmSync(dir, { recursive: true, force: true });
 });
 
+test('tier-2: symbol names extracted from diffs', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'isa-state-'));
+  git(dir, ['init', '-q']);
+  git(dir, ['config', 'user.email', 't@t.t']);
+  git(dir, ['config', 'user.name', 't']);
+  writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'demo', version: '1.0.0' }));
+  mkdirSync(join(dir, 'src'), { recursive: true });
+  writeFileSync(join(dir, 'src/a.mjs'), 'export function a() {}\n');
+  git(dir, ['add', '.']);
+  git(dir, ['commit', '-qm', 'init']);
+  writeFileSync(join(dir, 'src/a.mjs'), 'export function a() {}\nexport function b() {}\nconst C = 1;\nimport { x, y } from "./z";\n');
+  git(dir, ['add', '.']);
+  git(dir, ['commit', '-qm', 'feat']);
+  const s = snapshot(dir);
+  const f = s.base.files.find(x => x.path === 'src/a.mjs');
+  assert.ok(f.symbols.some(s => s.sign === '+' && s.kind === 'fn' && s.name === 'b'));
+  assert.ok(f.symbols.some(s => s.sign === '+' && s.kind === 'const' && s.name === 'C'));
+  assert.ok(f.symbols.some(s => s.sign === '+' && s.kind === 'imp' && s.name === 'x'));
+  assert.ok(f.symbols.some(s => s.sign === '+' && s.kind === 'imp' && s.name === 'y'));
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('tier-2: render includes symbols in compact form', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'isa-state-'));
+  git(dir, ['init', '-q']);
+  git(dir, ['config', 'user.email', 't@t.t']);
+  git(dir, ['config', 'user.name', 't']);
+  writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'demo', version: '1.0.0' }));
+  mkdirSync(join(dir, 'src'), { recursive: true });
+  writeFileSync(join(dir, 'src/a.mjs'), 'export function a() {}\n');
+  git(dir, ['add', '.']);
+  git(dir, ['commit', '-qm', 'init']);
+  writeFileSync(join(dir, 'src/a.mjs'), 'export function a() {}\nexport function b() {}\n');
+  git(dir, ['add', '.']);
+  git(dir, ['commit', '-qm', 'feat']);
+  const text = render(snapshot(dir), true);
+  assert.match(text, /\+fn:b/);
+  rmSync(dir, { recursive: true, force: true });
+});
+
 test('snapshot: no git repo fails closed', () => {
   const dir = mkdtempSync(join(tmpdir(), 'isa-state-'));
   assert.throws(() => snapshot(dir), /no git repo/);

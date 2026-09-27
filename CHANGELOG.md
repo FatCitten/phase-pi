@@ -1,23 +1,21 @@
 # Changelog
 
+## 0.5.0 — 2026-09-27 — second tier: symbol names in the snapshot
+
+The snapshot now has two tiers. Tier-1 (default): construct tokens. Tier-2
+(`--base` any range): symbol-level changes — function, class, const, let,
+var, import names added/removed.
+
+- **`isa state`**: per-file diff now includes `+fn:name -fn:name +cls:name
+  -cls:name +const:name -const:name +let:name -let:name +var:name -var:name
+  +imp:name -imp:name`. Example: `+imp:snapshot +imp:render -fn:remainingWallMs
+  -fn:signalExceeded +const:NODE +const:SHELL_TIMEOUT_MS`.
+- **`isa begin`**: auto-records the tier-1 snapshot to the bus as
+  `sig.run.snapshot`. Every run has an immutable record of repo state at start.
+- **Tests**: `test/state.test.mjs` exercises symbol extraction; `test/engine.test.mjs`
+  verifies `sig.run.snapshot` on the data bus.
+
 ## 0.4.0 — 2026-09-27 — the comprehension snapshot
-
-The next piece: a compact vocabulary for repo state + diff, so the session
-LLM can comprehend its environment in a minimum of tokens.
-
-- **`isa state`** (`bin/isa-state.mjs`): one token block — repo identity and
-  structure counts, the last change-set per file with construct tokens
-  (`add del +fn -fn +cls -cls +imp -imp +exp -exp +type -type +doc -doc cfg
-  script doc`), and uncommitted work (`w:path XY`). `--base` picks the
-  compared ref, `--compact` joins into one line, `--json` emits the
-  structured object. Fails closed outside a git repo.
-- **Native tool `isa_state`** in the hook: the snapshot as a first-class tool,
-  the cheapest read of the environment.
-- **Tests** (`test/state.test.mjs`): a throwaway git repo exercises identity,
-  structure counts, diff tokens (add/del/fn/doc), `--base`, work statuses,
-  compact rendering, and the no-git failure.
-
-## 0.3.0 — 2026-09-27 — the allocation is gone
 
 The allocation was the last piece of planning theater. `ROUTE` / `GRANT` /
 `ALLOC`, budgets, ceilings, the clamp, over-budget checks, and deny-mode are
